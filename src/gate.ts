@@ -43,7 +43,15 @@ export interface InboundMessage {
 export type GateResult =
   | { kind: 'drop'; reason: string }
   | { kind: 'verdict'; verdict: Verdict }
-  | { kind: 'deliver'; content: string; meta: Record<string, string> };
+  | {
+      kind: 'deliver';
+      content: string;
+      meta: Record<string, string>;
+      /** 添付（テキストの添付を本文に差し込むのに使う） */
+      files?: FileInfo[] | undefined;
+      /** 本文があったか（無ければ content は添付の代わりの文言） */
+      hasText?: boolean | undefined;
+    };
 
 const DEFAULT_DEDUPE_CAPACITY = 500;
 
@@ -180,7 +188,13 @@ export function gate(
     return { kind: 'verdict', verdict };
   }
 
-  return { kind: 'deliver', content: contentOf(text, msg.files, inChannel), meta: buildMeta(msg) };
+  return {
+    kind: 'deliver',
+    content: contentOf(text, msg.files, inChannel),
+    meta: buildMeta(msg),
+    ...(msg.files !== undefined && msg.files.length > 0 ? { files: msg.files } : {}),
+    hasText: text !== '',
+  };
 }
 
 /** Claude に渡す本文。本文が空なら添付の代わりの文言、チャンネルでメンションだけの投稿（添付も無い）なら本文なしの文言 */

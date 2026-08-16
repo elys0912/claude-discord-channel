@@ -145,6 +145,15 @@ describe('loadTokens', () => {
     expect(loadTokens(dir).sessionAllowAll).toBe(true);
   });
 
+  it('INLINE_TEXT_MAX_KB を整数で読み、範囲外や数でなければ Error', () => {
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nINLINE_TEXT_MAX_KB=0\n`);
+    expect(loadTokens(dir).inlineTextMaxKb).toBe(0);
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nINLINE_TEXT_MAX_KB=2048\n`);
+    expect(() => loadTokens(dir)).toThrow(/INLINE_TEXT_MAX_KB/);
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nINLINE_TEXT_MAX_KB=abc\n`);
+    expect(() => loadTokens(dir)).toThrow(/INLINE_TEXT_MAX_KB/);
+  });
+
   it('process.env を変更しない', () => {
     write(`DISCORD_BOT_TOKEN=${TOKEN}\n`);
     loadTokens(dir);

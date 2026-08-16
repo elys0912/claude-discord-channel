@@ -25,6 +25,8 @@ import type { DownloadDeps } from './download.js';
 import { HookInbox } from './hook-inbox.js';
 import { hookToNotice } from './hook-notices.js';
 import { NoticePoster } from './notice.js';
+import { inlineTextAttachments } from './inline-text.js';
+import type { InlineDeps } from './inline-text.js';
 
 // Discord 側で「読んだ」「許可した」「拒否した」を示すリアクション
 export const REACTION = {
@@ -73,6 +75,8 @@ export interface Wiring {
   session?: AppSession | undefined;
   /** 「このセッション中は全部許可」（.env で有効にしたボットだけ）。無ければボタンも !lock も使えない */
   sessionAllow?: SessionAllowAll | undefined;
+  /** テキストの添付を本文に差し込む。無ければ差し込まない */
+  inline?: InlineDeps | undefined;
 }
 
 /** Claude に渡さず、ブリッジ自身が処理するコマンド（`!restart force` だけ引数を取る） */
@@ -236,12 +240,22 @@ export async function handleMessage(wiring: Wiring, result: GateResult, raw: Inb
       }
       return;
 
-    case 'deliver':
+    case 'deliver': {
       if (raw.channel && raw.threadTs) relay.rememberThread(raw.channel, raw.threadTs);
-      await server.pushMessage(result.content, result.meta);
+      let { content, meta } = result;
+      if (wiring.inline && result.files && raw.channel && raw.ts) {
+        const at = { chatId: raw.channel, messageId: raw.ts, threadId: raw.threadTs };
+        const r = await inlineTextAttachments(wiring.inline, at, content, result.hasText ?? true, result.files);
+        if (r.inlined.length > 0) {
+          content = r.content;
+          meta = { ...meta, inlined: r.inlined.join(',') };
+        }
+      }
+      await server.pushMessage(content, meta);
       if (raw.channel && raw.threadTs) watchdog.delivered({ channel: raw.channel, threadTs: raw.threadTs });
       if (raw.channel && raw.ts) await bridge.addReaction(raw.channel, raw.ts, REACTION.SEEN);
       return;
+    }
 
     default:
       assertNever(result);
@@ -455,6 +469,8 @@ export interface BridgeAppOptions {
   killParent?: SessionControlOptions['killParent'];
   /** 実行許可に「このセッション中は全部許可」ボタンを出すか（.env の SESSION_ALLOW_ALL）。除外する ask は denyFiles から読む */
   sessionAllowAll?: boolean | undefined;
+  /** テキストの添付を本文に差し込む手段と上限。省略時は差し込まない */
+  inline?: InlineDeps | undefined;
 }
 
 /**
@@ -541,7 +557,7 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
   const session = opts.restartFlagFile
     ? new SessionControl({ console: opts.console, restartFlagFile: opts.restartFlagFile, bridge, logger, killParent: opts.killParent, sessionId: () => sessionId })
     : undefined;
-  const wiring: Wiring = { bridge, server, relay, logger, watchdog, screen, rules, status, session, sessionAllow };
+  const wiring: Wiring = { bridge, server, relay, logger, watchdog, screen, rules, status, session, sessionAllow, inline: opts.inline };
 
 
   let stopped: Promise<void> | undefined;

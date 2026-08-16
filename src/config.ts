@@ -73,7 +73,12 @@ export interface Tokens {
   downloadDir?: string;
   /** .env の SESSION_ALLOW_ALL が on / true / 1 なら、実行許可に「このセッション中は全部許可」ボタンを出す */
   sessionAllowAll?: boolean;
+  /** .env の INLINE_TEXT_MAX_KB。テキストの添付を本文に差し込む 1 ファイルの上限（KB）。0 なら差し込まない */
+  inlineTextMaxKb?: number;
 }
+
+/** INLINE_TEXT_MAX_KB の上限（Claude に渡す本文を膨らませすぎない） */
+const INLINE_TEXT_MAX_KB_LIMIT = 1024;
 
 /** ボットのトークンの形（`.` で区切られた 3 つの部分）。値そのものはログやエラーに出さない */
 const BOT_TOKEN_RE = /^[\w-]{20,}\.[\w-]{5,}\.[\w-]{25,}$/;
@@ -104,6 +109,14 @@ export function loadTokens(dir: string): Tokens {
     tokens.downloadDir = path.resolve(downloadDir);
   }
   if (/^(on|true|1)$/i.test(parsed.SESSION_ALLOW_ALL ?? '')) tokens.sessionAllowAll = true;
+  const inlineKb = parsed.INLINE_TEXT_MAX_KB;
+  if (inlineKb !== undefined && inlineKb !== '') {
+    const n = Number(inlineKb);
+    if (!Number.isInteger(n) || n < 0 || n > INLINE_TEXT_MAX_KB_LIMIT) {
+      throw new Error(`INLINE_TEXT_MAX_KB は 0〜${INLINE_TEXT_MAX_KB_LIMIT} の整数で指定する`);
+    }
+    tokens.inlineTextMaxKb = n;
+  }
   return tokens;
 }
 
