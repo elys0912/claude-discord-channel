@@ -75,7 +75,14 @@ export interface Tokens {
   sessionAllowAll?: boolean;
   /** .env の INLINE_TEXT_MAX_KB。テキストの添付を本文に差し込む 1 ファイルの上限（KB）。0 なら差し込まない */
   inlineTextMaxKb?: number;
+  /** .env の UPLOAD_DIRS（`;` 区切りの絶対パス）。確認なしで送ってよいフォルダー。設定されているときだけ send_file を出す */
+  uploadDirs?: string[];
+  /** .env の UPLOAD_MAX_MB。送るファイル 1 つの上限（MB） */
+  uploadMaxMb?: number;
 }
+
+/** UPLOAD_MAX_MB の上限（ブーストの最上位でも 100MB） */
+const UPLOAD_MAX_MB_LIMIT = 100;
 
 /** INLINE_TEXT_MAX_KB の上限（Claude に渡す本文を膨らませすぎない） */
 const INLINE_TEXT_MAX_KB_LIMIT = 1024;
@@ -116,6 +123,23 @@ export function loadTokens(dir: string): Tokens {
       throw new Error(`INLINE_TEXT_MAX_KB は 0〜${INLINE_TEXT_MAX_KB_LIMIT} の整数で指定する`);
     }
     tokens.inlineTextMaxKb = n;
+  }
+  const uploadDirs = (parsed.UPLOAD_DIRS ?? '')
+    .split(';')
+    .map((d) => d.trim())
+    .filter((d) => d !== '');
+  if (uploadDirs.length > 0) {
+    // 相対パスはカレントディレクトリ次第で場所が変わるので受け付けない
+    if (uploadDirs.some((d) => !path.isAbsolute(d))) throw new Error('UPLOAD_DIRS は絶対パスを ; で区切って指定する');
+    tokens.uploadDirs = uploadDirs.map((d) => path.resolve(d));
+  }
+  const uploadMb = parsed.UPLOAD_MAX_MB;
+  if (uploadMb !== undefined && uploadMb !== '') {
+    const n = Number(uploadMb);
+    if (!Number.isInteger(n) || n < 1 || n > UPLOAD_MAX_MB_LIMIT) {
+      throw new Error(`UPLOAD_MAX_MB は 1〜${UPLOAD_MAX_MB_LIMIT} の整数で指定する`);
+    }
+    tokens.uploadMaxMb = n;
   }
   return tokens;
 }

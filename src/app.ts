@@ -25,6 +25,7 @@ import type { DownloadDeps } from './download.js';
 import { HookInbox } from './hook-inbox.js';
 import { hookToNotice } from './hook-notices.js';
 import { NoticePoster } from './notice.js';
+import { FileSender } from './send-file.js';
 import { inlineTextAttachments } from './inline-text.js';
 import type { InlineDeps } from './inline-text.js';
 
@@ -43,7 +44,7 @@ export type ToolBridge = Pick<DiscordBridge, 'postText' | 'addReaction' | 'updat
 /** 受信処理・起動停止まで含めた Discord 側の操作 */
 export type AppBridge = Pick<
   DiscordBridge,
-  'start' | 'stop' | 'postText' | 'postCard' | 'addReaction' | 'updateText' | 'postToAll' | 'updateCard'
+  'start' | 'stop' | 'postText' | 'postCard' | 'addReaction' | 'updateText' | 'postToAll' | 'updateCard' | 'sendFiles'
 > &
   Partial<Pick<DiscordBridge, 'isConnected'>>;
 
@@ -77,6 +78,8 @@ export interface Wiring {
   sessionAllow?: SessionAllowAll | undefined;
   /** テキストの添付を本文に差し込む。無ければ差し込まない */
   inline?: InlineDeps | undefined;
+  /** send_file の確認ボタンの処理。無ければ send_file は使えない */
+  files?: Pick<FileSender, 'confirm'> | undefined;
 }
 
 /** Claude に渡さず、ブリッジ自身が処理するコマンド（`!restart force` だけ引数を取る） */
@@ -142,7 +145,7 @@ export function normalizeEmoji(emoji: string): string {
 
 // --- Claude → Discord（MCP ツールの実体） ----------------------------------------
 
-export type ToolHandlers = Pick<McpDeps, 'onReply' | 'onReact' | 'onEdit' | 'onDownload'>;
+export type ToolHandlers = Pick<McpDeps, 'onReply' | 'onReact' | 'onEdit' | 'onDownload' | 'onSendFile'>;
 
 /**
  * reply / react / edit_message / download_file の実体。失敗しても投げず、Claude が読めるエラー文を返す。
@@ -153,7 +156,8 @@ export function createToolHandlers(
   bridge: ToolBridge,
   logger: Logger,
   onActivity?: () => void,
-  download?: DownloadDeps
+  download?: DownloadDeps,
+  files?: Pick<FileSender, 'send'>
 ): ToolHandlers {
   const run = async (tool: string, action: () => Promise<string>): Promise<string> => {
     onActivity?.();
@@ -193,6 +197,8 @@ export function createToolHandlers(
             return result;
           })
       : undefined,
+
+    onSendFile: files ? (args) => run('send_file', () => files.send(args)) : undefined,
   };
 }
 
@@ -374,6 +380,10 @@ export async function handleAction(wiring: Wiring, parsed: ActionParse, ctx: Act
       if (at && wiring.rules) await wiring.rules.remove(parsed.listId, parsed.index, at, byUserId);
       return;
 
+    case 'file_confirm':
+      if (at && wiring.files) await wiring.files.confirm(parsed.confirmId, parsed.accept, at, byUserId);
+      return;
+
     default:
       assertNever(parsed);
   }
@@ -471,6 +481,8 @@ export interface BridgeAppOptions {
   sessionAllowAll?: boolean | undefined;
   /** テキストの添付を本文に差し込む手段と上限。省略時は差し込まない */
   inline?: InlineDeps | undefined;
+  /** send_file の設定（.env の UPLOAD_DIRS があるとき）。省略時は send_file を出さない */
+  upload?: { dirs: string[]; maxBytes?: number | undefined; protectedDirs?: string[] | undefined } | undefined;
 }
 
 /**
@@ -500,9 +512,20 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
     : undefined;
 
   // server と relay は互いを参照する。relay を使うのは接続後なので、宣言順はこれでよい
+  // send_file の結果は確認が済んでから Claude に知らせる（server は下で作る。呼ばれるのは接続後）
+  const files = opts.upload
+    ? new FileSender({
+        bridge,
+        notify: (content, meta) => server.pushMessage(content, meta),
+        uploadDirs: opts.upload.dirs,
+        maxBytes: opts.upload.maxBytes,
+        protectedDirs: opts.upload.protectedDirs,
+        logger,
+      })
+    : undefined;
   const server: ChannelServer = new ChannelServer({
     logger,
-    ...createToolHandlers(bridge, logger, () => watchdog.activity(), opts.download),
+    ...createToolHandlers(bridge, logger, () => watchdog.activity(), opts.download, files),
     onPermissionRequest: (req) => {
       watchdog.activity();
       return relay.request(req);
@@ -557,7 +580,7 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
   const session = opts.restartFlagFile
     ? new SessionControl({ console: opts.console, restartFlagFile: opts.restartFlagFile, bridge, logger, killParent: opts.killParent, sessionId: () => sessionId })
     : undefined;
-  const wiring: Wiring = { bridge, server, relay, logger, watchdog, screen, rules, status, session, sessionAllow, inline: opts.inline };
+  const wiring: Wiring = { bridge, server, relay, logger, watchdog, screen, rules, status, session, sessionAllow, inline: opts.inline, files };
 
 
   let stopped: Promise<void> | undefined;
@@ -566,6 +589,7 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
       opts.lock?.release();
       inbox?.stop();
       session?.stop();
+      files?.stop();
       watchdog.stop();
       try {
         // Discord の書き換えと Claude への通知が届くよう、切断より前に行う（denyAll は投げない）

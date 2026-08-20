@@ -61,6 +61,8 @@ describe('parseInteraction', () => {
     ['scr:show', { kind: 'screen_show' }],
     ['rule:add:abcd1234', { kind: 'rule_confirm', proposalId: 'abcd1234', accept: true }],
     ['rule:cancel:abcd1234', { kind: 'rule_confirm', proposalId: 'abcd1234', accept: false }],
+    ['file:ok:abcd1234', { kind: 'file_confirm', confirmId: 'abcd1234', accept: true }],
+    ['file:no:abcd1234', { kind: 'file_confirm', confirmId: 'abcd1234', accept: false }],
   ])('ボタン %s を解釈する', (id, expected) => {
     expect(parseInteraction(input({ customId: id }), access, allowed)).toEqual({ ok: true, ...expected });
   });

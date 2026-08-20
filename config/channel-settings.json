@@ -11,7 +11,8 @@
       "Grep",
       "mcp__discordbridge__reply",
       "mcp__discordbridge__react",
-      "mcp__discordbridge__edit_message"
+      "mcp__discordbridge__edit_message",
+      "mcp__discordbridge__send_file"
     ],
     "deny": [
       "Read(~/.claude/channels/**)",

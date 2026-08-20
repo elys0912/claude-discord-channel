@@ -154,6 +154,17 @@ describe('loadTokens', () => {
     expect(() => loadTokens(dir)).toThrow(/INLINE_TEXT_MAX_KB/);
   });
 
+  it('UPLOAD_DIRS を ; で区切って読み、相対パスがあれば Error。UPLOAD_MAX_MB は 1〜100', () => {
+    const a = path.join(dir, 'a');
+    const b = path.join(dir, 'b');
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nUPLOAD_DIRS=${a};${b};\nUPLOAD_MAX_MB=25\n`);
+    expect(loadTokens(dir)).toMatchObject({ uploadDirs: [a, b], uploadMaxMb: 25 });
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nUPLOAD_DIRS=${a};rel\n`);
+    expect(() => loadTokens(dir)).toThrow(/UPLOAD_DIRS/);
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nUPLOAD_MAX_MB=0\n`);
+    expect(() => loadTokens(dir)).toThrow(/UPLOAD_MAX_MB/);
+  });
+
   it('process.env を変更しない', () => {
     write(`DISCORD_BOT_TOKEN=${TOKEN}\n`);
     loadTokens(dir);
