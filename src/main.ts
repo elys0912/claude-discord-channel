@@ -89,7 +89,7 @@ async function main(dir: string, logger: Logger): Promise<void> {
     return;
   }
 
-  const bridge = new DiscordBridge({ token: tokens.botToken, access, logger });
+  const bridge = new DiscordBridge({ token: tokens.botToken, access, logger, longReplyChars: tokens.longReplyChars });
   try {
     const init = await bridge.init();
     logger.info(`Discord 接続確認 OK bot=${init.botTag}(${init.botUserId}) guild=${init.guildName} dm=${init.dmChannelCount}件`);

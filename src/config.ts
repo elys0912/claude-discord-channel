@@ -79,13 +79,21 @@ export interface Tokens {
   uploadDirs?: string[];
   /** .env の UPLOAD_MAX_MB。送るファイル 1 つの上限（MB） */
   uploadMaxMb?: number;
+  /** .env の LONG_REPLY_CHARS。これを超える返信は冒頭と全文の添付にする。0 なら分けて送る */
+  longReplyChars?: number;
 }
 
-/** UPLOAD_MAX_MB の上限（ブーストの最上位でも 100MB） */
-const UPLOAD_MAX_MB_LIMIT = 100;
-
-/** INLINE_TEXT_MAX_KB の上限（Claude に渡す本文を膨らませすぎない） */
-const INLINE_TEXT_MAX_KB_LIMIT = 1024;
+/**
+ * .env の整数の設定を読む。無い・空なら undefined。min〜max の整数でなければ投げる。
+ * 範囲: INLINE_TEXT_MAX_KB は Claude に渡す本文を膨らませすぎない 1024 まで、UPLOAD_MAX_MB はブーストの最上位の 100 まで
+ */
+function readInt(parsed: Record<string, string>, key: string, min: number, max: number): number | undefined {
+  const raw = parsed[key];
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < min || n > max) throw new Error(`${key} は ${min}〜${max} の整数で指定する`);
+  return n;
+}
 
 /** ボットのトークンの形（`.` で区切られた 3 つの部分）。値そのものはログやエラーに出さない */
 const BOT_TOKEN_RE = /^[\w-]{20,}\.[\w-]{5,}\.[\w-]{25,}$/;
@@ -116,14 +124,10 @@ export function loadTokens(dir: string): Tokens {
     tokens.downloadDir = path.resolve(downloadDir);
   }
   if (/^(on|true|1)$/i.test(parsed.SESSION_ALLOW_ALL ?? '')) tokens.sessionAllowAll = true;
-  const inlineKb = parsed.INLINE_TEXT_MAX_KB;
-  if (inlineKb !== undefined && inlineKb !== '') {
-    const n = Number(inlineKb);
-    if (!Number.isInteger(n) || n < 0 || n > INLINE_TEXT_MAX_KB_LIMIT) {
-      throw new Error(`INLINE_TEXT_MAX_KB は 0〜${INLINE_TEXT_MAX_KB_LIMIT} の整数で指定する`);
-    }
-    tokens.inlineTextMaxKb = n;
-  }
+  const inlineKb = readInt(parsed, 'INLINE_TEXT_MAX_KB', 0, 1024);
+  if (inlineKb !== undefined) tokens.inlineTextMaxKb = inlineKb;
+  const longReply = readInt(parsed, 'LONG_REPLY_CHARS', 0, 100_000);
+  if (longReply !== undefined) tokens.longReplyChars = longReply;
   const uploadDirs = (parsed.UPLOAD_DIRS ?? '')
     .split(';')
     .map((d) => d.trim())
@@ -133,14 +137,8 @@ export function loadTokens(dir: string): Tokens {
     if (uploadDirs.some((d) => !path.isAbsolute(d))) throw new Error('UPLOAD_DIRS は絶対パスを ; で区切って指定する');
     tokens.uploadDirs = uploadDirs.map((d) => path.resolve(d));
   }
-  const uploadMb = parsed.UPLOAD_MAX_MB;
-  if (uploadMb !== undefined && uploadMb !== '') {
-    const n = Number(uploadMb);
-    if (!Number.isInteger(n) || n < 1 || n > UPLOAD_MAX_MB_LIMIT) {
-      throw new Error(`UPLOAD_MAX_MB は 1〜${UPLOAD_MAX_MB_LIMIT} の整数で指定する`);
-    }
-    tokens.uploadMaxMb = n;
-  }
+  const uploadMb = readInt(parsed, 'UPLOAD_MAX_MB', 1, 100);
+  if (uploadMb !== undefined) tokens.uploadMaxMb = uploadMb;
   return tokens;
 }
 
