@@ -102,6 +102,27 @@ export class SessionControl {
     await this.say(at, '🧹 /clear を送った。終わると「会話をクリアした」の知らせが来る');
   }
 
+  /**
+   * `!stop`: Esc を送って、Claude の今の作業（応答・ツールの実行）を中断する。送れたら true。投げない。
+   * 応答中でなければ Esc は何も起こさないので、画面の状態は確かめずに送る
+   */
+  async interrupt(at: ThreadRef, byUserId: string): Promise<boolean> {
+    const console = this.opts.console;
+    if (!console) {
+      await this.say(at, '⚠️ このブリッジからはターミナルを操作できないので、中断できない（!restart force なら強制終了できる）');
+      return false;
+    }
+    try {
+      await console.sendKeys(['Esc']);
+      this.opts.logger.info(`!stop by=${byUserId}: Esc を送った`);
+      return true;
+    } catch (e) {
+      this.opts.logger.warn('Esc の送信に失敗', e);
+      await this.say(at, `⚠️ 中断のキーを送れなかった: ${errMessage(e)}`);
+      return false;
+    }
+  }
+
   stop(): void {
     this.clearExitCheck();
   }
