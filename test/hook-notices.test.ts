@@ -11,6 +11,18 @@ function ev(fields: Partial<HookEvent> & { hook_event_name: string }): HookEvent
 
 describe('hookToNotice', () => {
   it.each([
+    [ev({ hook_event_name: 'StopFailure', error: 'rate_limit' }), idle, 'error'],
+    [ev({ hook_event_name: 'Stop' }), waiting, 'warn'],
+    [ev({ hook_event_name: 'Notification', notification_type: 'permission_prompt' }), idle, 'warn'],
+    [ev({ hook_event_name: 'SessionStart', source: 'startup' }), idle, 'ok'],
+    [ev({ hook_event_name: 'SessionStart', source: 'clear' }), idle, 'info'],
+    [ev({ hook_event_name: 'PostCompact', trigger: 'auto' }), idle, 'info'],
+    [ev({ hook_event_name: 'SessionEnd', reason: 'other' }), idle, 'muted'],
+  ] as const)('%o の色は %s', (event, ctx, color) => {
+    expect(hookToNotice(event, ctx)?.color).toBe(color);
+  });
+
+  it.each([
     ['permission_prompt', idle, 'ターミナル側で入力待ち', true],
     ['elicitation_dialog', idle, 'ターミナル側で入力待ち', true],
     ['agent_needs_input', idle, 'ターミナル側で入力待ち', true],
