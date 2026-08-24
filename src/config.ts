@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { errMessage } from './errors.js';
+import { DEFAULT_KEEPALIVE_AFTER_MIN, DEFAULT_KEEPALIVE_MAX, DEFAULT_KEEPALIVE_QUIET, parseQuietHours } from './keepalive.js';
+import type { QuietHours } from './keepalive.js';
 import { stripBom } from './text.js';
 
 /** 状態ディレクトリの既定の場所（ホームからの相対。scripts/start.ps1 の $DefaultStateDirRelative と同じ値にすること） */
@@ -81,6 +83,8 @@ export interface Tokens {
   uploadMaxMb?: number;
   /** .env の LONG_REPLY_CHARS。これを超える返信は冒頭と全文の添付にする。0 なら分けて送る */
   longReplyChars?: number;
+  /** キャッシュのつなぎ止め（.env の KEEPALIVE / KEEPALIVE_AFTER_MIN / KEEPALIVE_MAX / KEEPALIVE_QUIET） */
+  keepalive: { enabled: boolean; afterMin: number; max: number; quiet: QuietHours | undefined };
 }
 
 /**
@@ -93,6 +97,27 @@ function readInt(parsed: Record<string, string>, key: string, min: number, max: 
   const n = Number(raw);
   if (!Number.isInteger(n) || n < min || n > max) throw new Error(`${key} は ${min}〜${max} の整数で指定する`);
   return n;
+}
+
+/** キャッシュのつなぎ止めの設定。KEEPALIVE は既定で on（off / false / 0 で止める） */
+function readKeepalive(parsed: Record<string, string>): Tokens['keepalive'] {
+  const raw = (parsed.KEEPALIVE ?? '').trim();
+  if (raw !== '' && !/^(on|true|1|off|false|0)$/i.test(raw)) throw new Error('KEEPALIVE は on か off で指定する');
+  let quiet: QuietHours | undefined = DEFAULT_KEEPALIVE_QUIET;
+  if (parsed.KEEPALIVE_QUIET !== undefined) {
+    try {
+      quiet = parseQuietHours(parsed.KEEPALIVE_QUIET);
+    } catch (e) {
+      throw new Error(`KEEPALIVE_QUIET: ${errMessage(e)}`, { cause: e });
+    }
+  }
+  return {
+    enabled: !/^(off|false|0)$/i.test(raw),
+    // キャッシュの期限は 1 時間なので、それより前に送る
+    afterMin: readInt(parsed, 'KEEPALIVE_AFTER_MIN', 1, 59) ?? DEFAULT_KEEPALIVE_AFTER_MIN,
+    max: readInt(parsed, 'KEEPALIVE_MAX', 0, 48) ?? DEFAULT_KEEPALIVE_MAX,
+    quiet,
+  };
 }
 
 /** ボットのトークンの形（`.` で区切られた 3 つの部分）。値そのものはログやエラーに出さない */
@@ -116,7 +141,7 @@ export function loadTokens(dir: string): Tokens {
   const botToken = parsed.DISCORD_BOT_TOKEN;
   if (!botToken) throw new Error('DISCORD_BOT_TOKEN が設定されていない');
   if (!BOT_TOKEN_RE.test(botToken)) throw new Error('DISCORD_BOT_TOKEN の形が不正（Developer Portal の Bot で発行したトークンを貼る）');
-  const tokens: Tokens = { botToken };
+  const tokens: Tokens = { botToken, keepalive: readKeepalive(parsed) };
   const downloadDir = parsed.DOWNLOAD_DIR;
   if (downloadDir) {
     // 相対パスはカレントディレクトリ（起動したプロジェクト）次第で保存先が変わるので受け付けない

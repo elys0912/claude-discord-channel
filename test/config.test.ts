@@ -103,7 +103,21 @@ describe('loadTokens', () => {
 
   it('正常系: ボットのトークンを読み込める', () => {
     write(`DISCORD_BOT_TOKEN=${TOKEN}\n`);
-    expect(loadTokens(dir)).toEqual({ botToken: TOKEN });
+    expect(loadTokens(dir)).toEqual({
+      botToken: TOKEN,
+      keepalive: { enabled: true, afterMin: 55, max: 6, quiet: { start: 60, end: 420 } },
+    });
+  });
+
+  it('KEEPALIVE の設定を読み、off・時間帯なし・範囲外を扱う', () => {
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nKEEPALIVE=off\nKEEPALIVE_AFTER_MIN=50\nKEEPALIVE_MAX=3\nKEEPALIVE_QUIET=\n`);
+    expect(loadTokens(dir).keepalive).toEqual({ enabled: false, afterMin: 50, max: 3, quiet: undefined });
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nKEEPALIVE_AFTER_MIN=60\n`);
+    expect(() => loadTokens(dir)).toThrow(/KEEPALIVE_AFTER_MIN/);
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nKEEPALIVE_QUIET=1-7\n`);
+    expect(() => loadTokens(dir)).toThrow(/KEEPALIVE_QUIET/);
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nKEEPALIVE=maybe\n`);
+    expect(() => loadTokens(dir)).toThrow(/KEEPALIVE は on か off/);
   });
 
   it('ファイルが無ければ Error', () => {

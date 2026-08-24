@@ -117,6 +117,12 @@ async function main(dir: string, logger: Logger): Promise<void> {
     download: tokens.downloadDir ? { bridge, dir: tokens.downloadDir } : undefined,
     sessionAllowAll: tokens.sessionAllowAll === true,
     inline: inlineDeps(bridge, logger, tokens.inlineTextMaxKb),
+    keepalive: {
+      enabled: tokens.keepalive.enabled && tokens.keepalive.max > 0,
+      afterMs: tokens.keepalive.afterMin * 60_000,
+      max: tokens.keepalive.max,
+      quiet: tokens.keepalive.quiet,
+    },
     upload: tokens.uploadDirs
       ? {
           dirs: tokens.uploadDirs,
