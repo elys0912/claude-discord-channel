@@ -500,6 +500,13 @@ export class DiscordBridge {
     return { ts: sent.id };
   }
 
+  /** 返信先に「入力中…」を出す（約 10 秒で消える） */
+  async sendTyping(channel: string, threadTs?: string): Promise<void> {
+    this.assertAllowed(channel);
+    const target = await this.resolveTarget(channel, threadTs);
+    await target.channel.sendTyping();
+  }
+
   /** ファイルを添付して送る（send_file 用。送ってよいかの判定は send-file.ts が済ませている） */
   async sendFiles(channel: string, files: { path: string; name: string }[], text?: string, threadTs?: string): Promise<{ ts: string }> {
     this.assertAllowed(channel);

@@ -29,6 +29,7 @@ import { FileSender } from './send-file.js';
 import { Keepalive } from './keepalive.js';
 import type { QuietHours } from './keepalive.js';
 import { formatTime } from './text.js';
+import { TypingIndicator } from './typing.js';
 import { inlineTextAttachments } from './inline-text.js';
 import type { InlineDeps } from './inline-text.js';
 
@@ -47,7 +48,7 @@ export type ToolBridge = Pick<DiscordBridge, 'postText' | 'addReaction' | 'updat
 /** 受信処理・起動停止まで含めた Discord 側の操作 */
 export type AppBridge = Pick<
   DiscordBridge,
-  'start' | 'stop' | 'postText' | 'postCard' | 'addReaction' | 'updateText' | 'postToAll' | 'updateCard' | 'sendFiles'
+  'start' | 'stop' | 'postText' | 'postCard' | 'addReaction' | 'updateText' | 'postToAll' | 'updateCard' | 'sendFiles' | 'sendTyping'
 > &
   Partial<Pick<DiscordBridge, 'isConnected'>>;
 
@@ -85,8 +86,10 @@ export interface Wiring {
   files?: Pick<FileSender, 'confirm'> | undefined;
   /** キャッシュのつなぎ止め。無ければ !keepalive は使えない */
   keepalive?: Pick<Keepalive, 'setEnabled' | 'status'> | undefined;
-  /** 本物のメッセージを Claude に中継した（作業中の印と、つなぎ止めの回数を戻すのに使う） */
-  onDelivered?: (() => void) | undefined;
+  /** 本物のメッセージを Claude に中継した（作業中の印・入力中の表示・つなぎ止めの回数を戻すのに使う） */
+  onDelivered?: ((at: ThreadRef) => void) | undefined;
+  /** 入力中の表示を止める（!stop など） */
+  stopTyping?: (() => void) | undefined;
 }
 
 /** Claude に渡さず、ブリッジ自身が処理するコマンド（`!restart force` だけ引数を取る） */
@@ -284,7 +287,7 @@ export async function handleMessage(wiring: Wiring, result: GateResult, raw: Inb
         }
       }
       await server.pushMessage(content, meta);
-      wiring.onDelivered?.();
+      if (raw.channel && raw.threadTs) wiring.onDelivered?.({ channel: raw.channel, threadTs: raw.threadTs });
       if (raw.channel && raw.threadTs) watchdog.delivered({ channel: raw.channel, threadTs: raw.threadTs });
       if (raw.channel && raw.ts) await bridge.addReaction(raw.channel, raw.ts, REACTION.SEEN);
       return;
@@ -297,7 +300,7 @@ export async function handleMessage(wiring: Wiring, result: GateResult, raw: Inb
 
 /** ブリッジ自身のコマンド。使えない環境ではその旨をスレッドに返す */
 async function handleCommand(
-  { bridge, screen, rules, status, session, sessionAllow, logger, watchdog, keepalive }: Wiring,
+  { bridge, screen, rules, status, session, sessionAllow, logger, watchdog, keepalive, stopTyping }: Wiring,
   command: Command,
   at: ThreadRef,
   byUserId: string
@@ -316,8 +319,9 @@ async function handleCommand(
         return;
       }
       if (await session.interrupt(at, byUserId)) {
-        // 中断したので、返事が無いという警告はもう出さない
+        // 中断したので、返事が無いという警告と入力中の表示はもう出さない
         watchdog.activity();
+        stopTyping?.();
         const text = '⏹ Esc を送って中断した。次の指示を待っている。ターミナルで確認が開いていた場合は、それも拒否になる';
         await bridge.postCard(at.channel, noticeCard(text, true, 'muted'), at.threadTs);
       }
@@ -572,6 +576,7 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
     : undefined;
 
   // server と relay は互いを参照する。relay を使うのは接続後なので、宣言順はこれでよい
+  const typing = new TypingIndicator(bridge, logger);
   // send_file の結果は確認が済んでから Claude に知らせる（server は下で作る。呼ばれるのは接続後）
   const files = opts.upload
     ? new FileSender({
@@ -585,9 +590,21 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
     : undefined;
   const server: ChannelServer = new ChannelServer({
     logger,
-    ...createToolHandlers(bridge, logger, () => watchdog.activity(), opts.download, files),
+    ...createToolHandlers(
+      bridge,
+      logger,
+      () => {
+        watchdog.activity();
+        // hook の記録が無いと応答の終わりが分からないので、ツールが呼ばれた時点で入力中の表示を止める
+        if (!opts.hookInboxFile) typing.stopAll();
+      },
+      opts.download,
+      files
+    ),
     onPermissionRequest: (req) => {
       watchdog.activity();
+      // 利用者の答えを待つ間は「入力中」ではない
+      typing.stopAll();
       return relay.request(req);
     },
   });
@@ -631,17 +648,22 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
               turnActive = true;
               break;
             case 'Stop':
+              typing.stopAll();
               turnActive = false;
               limited = false;
               keepalive?.requestEnded(event.at);
               break;
             case 'StopFailure':
+              typing.stopAll();
               turnActive = false;
               if (event.error === 'rate_limit') limited = true;
               keepalive?.requestEnded(event.at);
               break;
             case 'SessionStart':
               keepalive?.resetCount();
+              break;
+            case 'SessionEnd':
+              typing.stopAll();
               break;
           }
           // !clear などで新しい会話になったら、「全部許可」を解除する（会話ごとに許可し直す）
@@ -689,10 +711,12 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
     inline: opts.inline,
     files,
     keepalive,
-    onDelivered: () => {
+    onDelivered: (at) => {
       turnActive = true;
       keepalive?.resetCount();
+      typing.start(at.channel, at.threadTs);
     },
+    stopTyping: () => typing.stopAll(),
   };
 
   let stopped: Promise<void> | undefined;
@@ -703,6 +727,7 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
       session?.stop();
       files?.stop();
       keepalive?.stop();
+      typing.stopAll();
       watchdog.stop();
       try {
         // Discord の書き換えと Claude への通知が届くよう、切断より前に行う（denyAll は投げない）
