@@ -1,6 +1,7 @@
 // `!status` の文面（純関数）
 import { formatTime } from './text.js';
 import type { HookEvent } from './hook-event.js';
+import type { KeepaliveStatus } from './keepalive.js';
 import { MS_PER_MINUTE } from './watchdog.js';
 
 export interface StatusState {
@@ -15,7 +16,15 @@ export interface StatusState {
   lastHooks: HookEvent[];
   /** 「全部許可」。機能が無ければ undefined、無効なら null、有効なら開始時刻 */
   sessionAllowSince?: Date | null | undefined;
+  /** キャッシュのつなぎ止め。機能が無ければ undefined */
+  keepalive?: KeepaliveStatus | undefined;
   now: Date;
+}
+
+function keepaliveLine(k: KeepaliveStatus): string {
+  if (!k.enabled) return 'キャッシュのつなぎ止め: 無効（!keepalive on で有効）';
+  const next = k.nextAt ? `次は ${formatTime(k.nextAt)}` : '予定なし';
+  return `キャッシュのつなぎ止め: 有効（${next}、送った回数 ${k.sent}/${k.max}）`;
 }
 
 function elapsed(from: Date, to: Date): string {
@@ -44,6 +53,7 @@ export function buildStatusText(state: StatusState): string {
             ? '全部許可: 無効'
             : `全部許可: 有効（${formatTime(state.sessionAllowSince)} から。!lock で解除）`,
         ]),
+    ...(state.keepalive ? [keepaliveLine(state.keepalive)] : []),
     state.lastHooks.length > 0 ? `直近の hook:\n${state.lastHooks.map((e) => `  ${hookLine(e)}`).join('\n')}` : '直近の hook: 無し',
   ];
   return lines.join('\n');

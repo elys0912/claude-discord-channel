@@ -4,6 +4,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 import { errMessage } from './errors.js';
+import { DEFAULT_KEEPALIVE_AFTER_MIN, DEFAULT_KEEPALIVE_MAX, DEFAULT_KEEPALIVE_QUIET, parseQuietHours } from './keepalive.js';
+import type { QuietHours } from './keepalive.js';
 import { stripBom } from './text.js';
 
 /** 状態ディレクトリの既定の場所（ホームからの相対。scripts/start.ps1 の $DefaultStateDirRelative と同じ値にすること） */
@@ -73,6 +75,49 @@ export interface Tokens {
   downloadDir?: string;
   /** .env の SESSION_ALLOW_ALL が on / true / 1 なら、実行許可に「このセッション中は全部許可」ボタンを出す */
   sessionAllowAll?: boolean;
+  /** .env の INLINE_TEXT_MAX_KB。テキストの添付を本文に差し込む 1 ファイルの上限（KB）。0 なら差し込まない */
+  inlineTextMaxKb?: number;
+  /** .env の UPLOAD_DIRS（`;` 区切りの絶対パス）。確認なしで送ってよいフォルダー。設定されているときだけ send_file を出す */
+  uploadDirs?: string[];
+  /** .env の UPLOAD_MAX_MB。送るファイル 1 つの上限（MB） */
+  uploadMaxMb?: number;
+  /** .env の LONG_REPLY_CHARS。これを超える返信は冒頭と全文の添付にする。0 なら分けて送る */
+  longReplyChars?: number;
+  /** キャッシュのつなぎ止め（.env の KEEPALIVE / KEEPALIVE_AFTER_MIN / KEEPALIVE_MAX / KEEPALIVE_QUIET） */
+  keepalive: { enabled: boolean; afterMin: number; max: number; quiet: QuietHours | undefined };
+}
+
+/**
+ * .env の整数の設定を読む。無い・空なら undefined。min〜max の整数でなければ投げる。
+ * 範囲: INLINE_TEXT_MAX_KB は Claude に渡す本文を膨らませすぎない 1024 まで、UPLOAD_MAX_MB はブーストの最上位の 100 まで
+ */
+function readInt(parsed: Record<string, string>, key: string, min: number, max: number): number | undefined {
+  const raw = parsed[key];
+  if (raw === undefined || raw.trim() === '') return undefined;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < min || n > max) throw new Error(`${key} は ${min}〜${max} の整数で指定する`);
+  return n;
+}
+
+/** キャッシュのつなぎ止めの設定。KEEPALIVE は既定で on（off / false / 0 で止める） */
+function readKeepalive(parsed: Record<string, string>): Tokens['keepalive'] {
+  const raw = (parsed.KEEPALIVE ?? '').trim();
+  if (raw !== '' && !/^(on|true|1|off|false|0)$/i.test(raw)) throw new Error('KEEPALIVE は on か off で指定する');
+  let quiet: QuietHours | undefined = DEFAULT_KEEPALIVE_QUIET;
+  if (parsed.KEEPALIVE_QUIET !== undefined) {
+    try {
+      quiet = parseQuietHours(parsed.KEEPALIVE_QUIET);
+    } catch (e) {
+      throw new Error(`KEEPALIVE_QUIET: ${errMessage(e)}`, { cause: e });
+    }
+  }
+  return {
+    enabled: !/^(off|false|0)$/i.test(raw),
+    // キャッシュの期限は 1 時間なので、それより前に送る
+    afterMin: readInt(parsed, 'KEEPALIVE_AFTER_MIN', 1, 59) ?? DEFAULT_KEEPALIVE_AFTER_MIN,
+    max: readInt(parsed, 'KEEPALIVE_MAX', 0, 48) ?? DEFAULT_KEEPALIVE_MAX,
+    quiet,
+  };
 }
 
 /** ボットのトークンの形（`.` で区切られた 3 つの部分）。値そのものはログやエラーに出さない */
@@ -96,7 +141,7 @@ export function loadTokens(dir: string): Tokens {
   const botToken = parsed.DISCORD_BOT_TOKEN;
   if (!botToken) throw new Error('DISCORD_BOT_TOKEN が設定されていない');
   if (!BOT_TOKEN_RE.test(botToken)) throw new Error('DISCORD_BOT_TOKEN の形が不正（Developer Portal の Bot で発行したトークンを貼る）');
-  const tokens: Tokens = { botToken };
+  const tokens: Tokens = { botToken, keepalive: readKeepalive(parsed) };
   const downloadDir = parsed.DOWNLOAD_DIR;
   if (downloadDir) {
     // 相対パスはカレントディレクトリ（起動したプロジェクト）次第で保存先が変わるので受け付けない
@@ -104,6 +149,21 @@ export function loadTokens(dir: string): Tokens {
     tokens.downloadDir = path.resolve(downloadDir);
   }
   if (/^(on|true|1)$/i.test(parsed.SESSION_ALLOW_ALL ?? '')) tokens.sessionAllowAll = true;
+  const inlineKb = readInt(parsed, 'INLINE_TEXT_MAX_KB', 0, 1024);
+  if (inlineKb !== undefined) tokens.inlineTextMaxKb = inlineKb;
+  const longReply = readInt(parsed, 'LONG_REPLY_CHARS', 0, 100_000);
+  if (longReply !== undefined) tokens.longReplyChars = longReply;
+  const uploadDirs = (parsed.UPLOAD_DIRS ?? '')
+    .split(';')
+    .map((d) => d.trim())
+    .filter((d) => d !== '');
+  if (uploadDirs.length > 0) {
+    // 相対パスはカレントディレクトリ次第で場所が変わるので受け付けない
+    if (uploadDirs.some((d) => !path.isAbsolute(d))) throw new Error('UPLOAD_DIRS は絶対パスを ; で区切って指定する');
+    tokens.uploadDirs = uploadDirs.map((d) => path.resolve(d));
+  }
+  const uploadMb = readInt(parsed, 'UPLOAD_MAX_MB', 1, 100);
+  if (uploadMb !== undefined) tokens.uploadMaxMb = uploadMb;
   return tokens;
 }
 

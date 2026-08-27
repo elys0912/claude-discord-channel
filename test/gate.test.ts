@@ -50,6 +50,7 @@ describe('gate', () => {
       kind: 'deliver',
       content: 'hello',
       meta: { chat_id: DM, thread_id: MESSAGE, message_id: MESSAGE, user_id: USER, ts: '2026-10-11T00:00:00.000Z', kind: 'dm' },
+      hasText: true,
     });
   });
 

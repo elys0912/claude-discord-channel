@@ -25,6 +25,14 @@ import type { DownloadDeps } from './download.js';
 import { HookInbox } from './hook-inbox.js';
 import { hookToNotice } from './hook-notices.js';
 import { NoticePoster } from './notice.js';
+import { FileSender } from './send-file.js';
+import { Keepalive } from './keepalive.js';
+import type { QuietHours } from './keepalive.js';
+import { formatTime } from './text.js';
+import { TypingIndicator } from './typing.js';
+import { PresenceUpdater } from './presence.js';
+import { inlineTextAttachments } from './inline-text.js';
+import type { InlineDeps } from './inline-text.js';
 
 // Discord 側で「読んだ」「許可した」「拒否した」を示すリアクション
 export const REACTION = {
@@ -41,9 +49,9 @@ export type ToolBridge = Pick<DiscordBridge, 'postText' | 'addReaction' | 'updat
 /** 受信処理・起動停止まで含めた Discord 側の操作 */
 export type AppBridge = Pick<
   DiscordBridge,
-  'start' | 'stop' | 'postText' | 'postCard' | 'addReaction' | 'updateText' | 'postToAll' | 'updateCard'
+  'start' | 'stop' | 'postText' | 'postCard' | 'addReaction' | 'updateText' | 'postToAll' | 'updateCard' | 'sendFiles' | 'sendTyping'
 > &
-  Partial<Pick<DiscordBridge, 'isConnected'>>;
+  Partial<Pick<DiscordBridge, 'isConnected' | 'setPresence'>>;
 
 /** 受信処理が使う MCP サーバー側の操作 */
 export type AppServer = Pick<ChannelServer, 'pushMessage'>;
@@ -52,10 +60,10 @@ export type AppServer = Pick<ChannelServer, 'pushMessage'>;
 export type AppRelay = Pick<PermissionRelay, 'answerByText' | 'answerByButton' | 'rememberThread' | 'lookup'>;
 
 /** 無応答の見張りのうち、受信処理が使う操作 */
-export type AppWatchdog = Pick<ResponseWatchdog, 'delivered'>;
+export type AppWatchdog = Pick<ResponseWatchdog, 'delivered' | 'activity'>;
 export type AppScreen = Pick<ScreenRelay, 'show' | 'pick'>;
 export type AppRules = Pick<RuleRelay, 'propose' | 'confirm' | 'list' | 'remove'>;
-export type AppSession = Pick<SessionControl, 'restart' | 'compact' | 'clear'>;
+export type AppSession = Pick<SessionControl, 'restart' | 'compact' | 'clear' | 'interrupt'>;
 
 export interface Wiring {
   bridge: AppBridge;
@@ -73,12 +81,36 @@ export interface Wiring {
   session?: AppSession | undefined;
   /** 「このセッション中は全部許可」（.env で有効にしたボットだけ）。無ければボタンも !lock も使えない */
   sessionAllow?: SessionAllowAll | undefined;
+  /** テキストの添付を本文に差し込む。無ければ差し込まない */
+  inline?: InlineDeps | undefined;
+  /** send_file の確認ボタンの処理。無ければ send_file は使えない */
+  files?: Pick<FileSender, 'confirm'> | undefined;
+  /** キャッシュのつなぎ止め。無ければ !keepalive は使えない */
+  keepalive?: Pick<Keepalive, 'setEnabled' | 'status'> | undefined;
+  /** 本物のメッセージを Claude に中継した（作業中の印・入力中の表示・つなぎ止めの回数を戻すのに使う） */
+  onDelivered?: ((at: ThreadRef) => void) | undefined;
+  /** 入力中の表示を止める（!stop など） */
+  stopTyping?: (() => void) | undefined;
 }
 
 /** Claude に渡さず、ブリッジ自身が処理するコマンド（`!restart force` だけ引数を取る） */
-const COMMAND_RE = /^\s*!(help|screen|rules|status|restart(?:\s+force)?|compact|clear|lock)\s*$/i;
+const COMMAND_RE = /^\s*!(help|screen|rules|status|restart(?:\s+force)?|compact|clear|lock|stop|keepalive(?:\s+(?:on|off))?)\s*$/i;
 /** COMMAND_RE が受け付けるコマンド（小文字・空白 1 つに正規化した形） */
-const COMMANDS = ['help', 'screen', 'rules', 'status', 'restart', 'restart force', 'compact', 'clear', 'lock'] as const;
+const COMMANDS = [
+  'help',
+  'screen',
+  'rules',
+  'status',
+  'restart',
+  'restart force',
+  'compact',
+  'clear',
+  'lock',
+  'stop',
+  'keepalive',
+  'keepalive on',
+  'keepalive off',
+] as const;
 export type Command = (typeof COMMANDS)[number];
 
 function isCommand(name: string): name is Command {
@@ -90,12 +122,17 @@ export function assertNever(value: never): never {
   throw new Error(`想定外の値: ${JSON.stringify(value)}`);
 }
 
+/** キャッシュのつなぎ止めで Claude に送る本文（INSTRUCTIONS に、ツールを呼ばず ok とだけ書くよう書いてある） */
+export const KEEPALIVE_TEXT = 'keepalive（キャッシュのつなぎ止め。ツールを呼ばずに ok とだけ書く）';
+
 /** `!help` の文面 */
 export const HELP_TEXT = [
   '📖 ブリッジのコマンド（Claude には渡さず、ブリッジが処理する。Claude が止まっていても使える）',
   '• `!help` … この一覧',
   '• `!status` … ブリッジの稼働状態',
   '• `!screen` … ターミナルの画面を見る（選択画面なら選択メニューで選べる）',
+  '• `!stop` … Esc を送って、Claude の今の作業を中断する',
+  '• `!keepalive on` / `!keepalive off` … キャッシュのつなぎ止めを切り替える（`!keepalive` だけなら状態を見る）',
   '• `!rules` … Discord から足した許可ルールの一覧と削除',
   '• `!compact` … /compact を送る（会話を要約して縮める）',
   '• `!clear` … /clear を送る（会話を捨てて新しい会話にする）',
@@ -138,7 +175,7 @@ export function normalizeEmoji(emoji: string): string {
 
 // --- Claude → Discord（MCP ツールの実体） ----------------------------------------
 
-export type ToolHandlers = Pick<McpDeps, 'onReply' | 'onReact' | 'onEdit' | 'onDownload'>;
+export type ToolHandlers = Pick<McpDeps, 'onReply' | 'onReact' | 'onEdit' | 'onDownload' | 'onSendFile'>;
 
 /**
  * reply / react / edit_message / download_file の実体。失敗しても投げず、Claude が読めるエラー文を返す。
@@ -149,7 +186,8 @@ export function createToolHandlers(
   bridge: ToolBridge,
   logger: Logger,
   onActivity?: () => void,
-  download?: DownloadDeps
+  download?: DownloadDeps,
+  files?: Pick<FileSender, 'send'>
 ): ToolHandlers {
   const run = async (tool: string, action: () => Promise<string>): Promise<string> => {
     onActivity?.();
@@ -165,7 +203,7 @@ export function createToolHandlers(
     onReply: ({ chat_id, text, thread_id }) =>
       run('reply', async () => {
         const res = await bridge.postText(chat_id, text, thread_id);
-        return `sent (${res.ts.length} message(s))`;
+        return res.asFile ? 'sent (冒頭を本文に、全文を reply.md として添付した)' : `sent (${res.ts.length} message(s))`;
       }),
 
     onReact: ({ chat_id, message_id, emoji, thread_id }) =>
@@ -189,6 +227,8 @@ export function createToolHandlers(
             return result;
           })
       : undefined,
+
+    onSendFile: files ? (args) => run('send_file', () => files.send(args)) : undefined,
   };
 }
 
@@ -236,12 +276,23 @@ export async function handleMessage(wiring: Wiring, result: GateResult, raw: Inb
       }
       return;
 
-    case 'deliver':
+    case 'deliver': {
       if (raw.channel && raw.threadTs) relay.rememberThread(raw.channel, raw.threadTs);
-      await server.pushMessage(result.content, result.meta);
+      let { content, meta } = result;
+      if (wiring.inline && result.files && raw.channel && raw.ts) {
+        const at = { chatId: raw.channel, messageId: raw.ts, threadId: raw.threadTs };
+        const r = await inlineTextAttachments(wiring.inline, at, content, result.hasText ?? true, result.files);
+        if (r.inlined.length > 0) {
+          content = r.content;
+          meta = { ...meta, inlined: r.inlined.join(',') };
+        }
+      }
+      await server.pushMessage(content, meta);
+      if (raw.channel && raw.threadTs) wiring.onDelivered?.({ channel: raw.channel, threadTs: raw.threadTs });
       if (raw.channel && raw.threadTs) watchdog.delivered({ channel: raw.channel, threadTs: raw.threadTs });
       if (raw.channel && raw.ts) await bridge.addReaction(raw.channel, raw.ts, REACTION.SEEN);
       return;
+    }
 
     default:
       assertNever(result);
@@ -250,7 +301,7 @@ export async function handleMessage(wiring: Wiring, result: GateResult, raw: Inb
 
 /** ブリッジ自身のコマンド。使えない環境ではその旨をスレッドに返す */
 async function handleCommand(
-  { bridge, screen, rules, status, session, sessionAllow, logger }: Wiring,
+  { bridge, screen, rules, status, session, sessionAllow, logger, watchdog, keepalive, stopTyping }: Wiring,
   command: Command,
   at: ThreadRef,
   byUserId: string
@@ -263,6 +314,38 @@ async function handleCommand(
     case 'screen':
       await screen.show(at.channel, at.threadTs);
       return;
+    case 'stop':
+      if (!session) {
+        await unavailable('!stop');
+        return;
+      }
+      if (await session.interrupt(at, byUserId)) {
+        // 中断したので、返事が無いという警告と入力中の表示はもう出さない
+        watchdog.activity();
+        stopTyping?.();
+        const text = '⏹ Esc を送って中断した。次の指示を待っている。ターミナルで確認が開いていた場合は、それも拒否になる';
+        await bridge.postCard(at.channel, noticeCard(text, true, 'muted'), at.threadTs);
+      }
+      return;
+    case 'keepalive':
+    case 'keepalive on':
+    case 'keepalive off': {
+      if (!keepalive) {
+        await unavailable('!keepalive');
+        return;
+      }
+      if (command !== 'keepalive') {
+        keepalive.setEnabled(command === 'keepalive on');
+        logger.info(`keepalive を ${command === 'keepalive on' ? '有効' : '無効'}にした by=${byUserId}`);
+      }
+      const s = keepalive.status();
+      const next = s.nextAt ? `次は ${formatTime(s.nextAt)}` : '予定なし（Claude が次に応答を終えたら決まる）';
+      const text = s.enabled
+        ? `♻️ キャッシュのつなぎ止め: 有効（${next}、送った回数 ${s.sent}/${s.max}）`
+        : '♻️ キャッシュのつなぎ止め: 無効（起動し直すと .env の設定に戻る）';
+      await bridge.postText(at.channel, text, at.threadTs);
+      return;
+    }
     case 'rules':
       if (rules) await rules.list(at.channel, at.threadTs);
       else await unavailable('!rules');
@@ -360,6 +443,10 @@ export async function handleAction(wiring: Wiring, parsed: ActionParse, ctx: Act
       if (at && wiring.rules) await wiring.rules.remove(parsed.listId, parsed.index, at, byUserId);
       return;
 
+    case 'file_confirm':
+      if (at && wiring.files) await wiring.files.confirm(parsed.confirmId, parsed.accept, at, byUserId);
+      return;
+
     default:
       assertNever(parsed);
   }
@@ -455,6 +542,12 @@ export interface BridgeAppOptions {
   killParent?: SessionControlOptions['killParent'];
   /** 実行許可に「このセッション中は全部許可」ボタンを出すか（.env の SESSION_ALLOW_ALL）。除外する ask は denyFiles から読む */
   sessionAllowAll?: boolean | undefined;
+  /** テキストの添付を本文に差し込む手段と上限。省略時は差し込まない */
+  inline?: InlineDeps | undefined;
+  /** キャッシュのつなぎ止めの設定。省略時はつなぎ止めない（hook の記録が無いと応答の終わりが分からないので、hookInboxFile も要る） */
+  keepalive?: { enabled: boolean; afterMs: number; max: number; quiet: QuietHours | undefined } | undefined;
+  /** send_file の設定（.env の UPLOAD_DIRS があるとき）。省略時は send_file を出さない */
+  upload?: { dirs: string[]; maxBytes?: number | undefined; protectedDirs?: string[] | undefined } | undefined;
 }
 
 /**
@@ -484,11 +577,35 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
     : undefined;
 
   // server と relay は互いを参照する。relay を使うのは接続後なので、宣言順はこれでよい
+  const typing = new TypingIndicator(bridge, logger);
+  // send_file の結果は確認が済んでから Claude に知らせる（server は下で作る。呼ばれるのは接続後）
+  const files = opts.upload
+    ? new FileSender({
+        bridge,
+        notify: (content, meta) => server.pushMessage(content, meta),
+        uploadDirs: opts.upload.dirs,
+        maxBytes: opts.upload.maxBytes,
+        protectedDirs: opts.upload.protectedDirs,
+        logger,
+      })
+    : undefined;
   const server: ChannelServer = new ChannelServer({
     logger,
-    ...createToolHandlers(bridge, logger, () => watchdog.activity(), opts.download),
+    ...createToolHandlers(
+      bridge,
+      logger,
+      () => {
+        watchdog.activity();
+        // hook の記録が無いと応答の終わりが分からないので、ツールが呼ばれた時点で入力中の表示を止める
+        if (!opts.hookInboxFile) typing.stopAll();
+      },
+      opts.download,
+      files
+    ),
     onPermissionRequest: (req) => {
       watchdog.activity();
+      // 利用者の答えを待つ間は「入力中」ではない
+      typing.stopAll();
       return relay.request(req);
     },
   });
@@ -498,6 +615,31 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
     : undefined;
   const relay: PermissionRelay = new PermissionRelay(bridge, server, logger, undefined, sessionAllow);
   const startedAt = new Date();
+
+  // --- キャッシュのつなぎ止め ------------------------------------------------------
+  /** Claude がターンの途中（中継してから、または手元で入力してから Stop まで） */
+  let turnActive = false;
+  /** 使用量の上限に当たっている（StopFailure の rate_limit から、次に応答が終わるまで） */
+  let limited = false;
+  const keepalive =
+    opts.keepalive && opts.hookInboxFile
+      ? new Keepalive({
+          ...opts.keepalive,
+          send: () => server.pushMessage(KEEPALIVE_TEXT, { kind: 'keepalive' }),
+          isBusy: () => turnActive || watchdog.isWaiting() || relay.pendingCount() > 0,
+          isLimited: () => limited,
+          logger,
+        })
+      : undefined;
+
+  // --- ボットのステータス表示 -------------------------------------------------------
+  const presence = bridge.setPresence
+    ? new PresenceUpdater({
+        inputs: () => ({ limited, pendingPermissions: relay.pendingCount(), working: turnActive }),
+        apply: (state) => bridge.setPresence?.(state),
+        logger,
+      })
+    : undefined;
 
   // --- hook の記録 → Discord への知らせ -----------------------------------------
   const notice = new NoticePoster(bridge, () => relay.lastThread, logger);
@@ -511,6 +653,29 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
         sessionTag: opts.sessionTag,
         onEvent: async (event) => {
           if (event.session_id) sessionId = event.session_id;
+          switch (event.hook_event_name) {
+            case 'UserPromptSubmit':
+              turnActive = true;
+              break;
+            case 'Stop':
+              typing.stopAll();
+              turnActive = false;
+              limited = false;
+              keepalive?.requestEnded(event.at);
+              break;
+            case 'StopFailure':
+              typing.stopAll();
+              turnActive = false;
+              if (event.error === 'rate_limit') limited = true;
+              keepalive?.requestEnded(event.at);
+              break;
+            case 'SessionStart':
+              keepalive?.resetCount();
+              break;
+            case 'SessionEnd':
+              typing.stopAll();
+              break;
+          }
           // !clear などで新しい会話になったら、「全部許可」を解除する（会話ごとに許可し直す）
           if (event.hook_event_name === 'SessionStart' && event.source === 'clear' && sessionAllow?.disable()) {
             logger.info('全部許可を解除（新しい会話）');
@@ -519,7 +684,7 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
           const found = hookToNotice(event, { waiting: watchdog.isWaiting(), pending: relay.pendingCount() });
           if (!found) return;
           logger.info(`hook を知らせる event=${event.hook_event_name} type=${event.notification_type ?? '-'}`);
-          await notice.post(found.text, noticeCard(found.text, found.screenButton && opts.console !== undefined));
+          await notice.post(found.text, noticeCard(found.text, found.screenButton && opts.console !== undefined, found.color));
         },
       })
     : undefined;
@@ -535,14 +700,34 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
       pendingPermissions: relay.pendingCount(),
       lastHooks: inbox?.lastEvents(5) ?? [],
       sessionAllowSince: sessionAllow ? (sessionAllow.current?.since ?? null) : undefined,
+      keepalive: keepalive?.status(),
       now: new Date(),
     });
   };
   const session = opts.restartFlagFile
     ? new SessionControl({ console: opts.console, restartFlagFile: opts.restartFlagFile, bridge, logger, killParent: opts.killParent, sessionId: () => sessionId })
     : undefined;
-  const wiring: Wiring = { bridge, server, relay, logger, watchdog, screen, rules, status, session, sessionAllow };
-
+  const wiring: Wiring = {
+    bridge,
+    server,
+    relay,
+    logger,
+    watchdog,
+    screen,
+    rules,
+    status,
+    session,
+    sessionAllow,
+    inline: opts.inline,
+    files,
+    keepalive,
+    onDelivered: (at) => {
+      turnActive = true;
+      keepalive?.resetCount();
+      typing.start(at.channel, at.threadTs);
+    },
+    stopTyping: () => typing.stopAll(),
+  };
 
   let stopped: Promise<void> | undefined;
   const stop = (): Promise<void> =>
@@ -550,6 +735,10 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
       opts.lock?.release();
       inbox?.stop();
       session?.stop();
+      files?.stop();
+      keepalive?.stop();
+      presence?.stop();
+      typing.stopAll();
       watchdog.stop();
       try {
         // Discord の書き換えと Claude への通知が届くよう、切断より前に行う（denyAll は投げない）
@@ -576,6 +765,7 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
   logger.info('Discord ブリッジ稼働中');
   // 起動の途中で終了処理（stdin の終了など）が始まっていたら、それ以上は始めない（止めた後に投稿やタイマーを残さない）
   if (stopped === undefined) await inbox?.start();
+  if (stopped === undefined) presence?.start();
 
   return { stop };
 }
