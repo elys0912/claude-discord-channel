@@ -30,6 +30,7 @@ import { Keepalive } from './keepalive.js';
 import type { QuietHours } from './keepalive.js';
 import { formatTime } from './text.js';
 import { TypingIndicator } from './typing.js';
+import { PresenceUpdater } from './presence.js';
 import { inlineTextAttachments } from './inline-text.js';
 import type { InlineDeps } from './inline-text.js';
 
@@ -50,7 +51,7 @@ export type AppBridge = Pick<
   DiscordBridge,
   'start' | 'stop' | 'postText' | 'postCard' | 'addReaction' | 'updateText' | 'postToAll' | 'updateCard' | 'sendFiles' | 'sendTyping'
 > &
-  Partial<Pick<DiscordBridge, 'isConnected'>>;
+  Partial<Pick<DiscordBridge, 'isConnected' | 'setPresence'>>;
 
 /** 受信処理が使う MCP サーバー側の操作 */
 export type AppServer = Pick<ChannelServer, 'pushMessage'>;
@@ -631,6 +632,15 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
         })
       : undefined;
 
+  // --- ボットのステータス表示 -------------------------------------------------------
+  const presence = bridge.setPresence
+    ? new PresenceUpdater({
+        inputs: () => ({ limited, pendingPermissions: relay.pendingCount(), working: turnActive }),
+        apply: (state) => bridge.setPresence?.(state),
+        logger,
+      })
+    : undefined;
+
   // --- hook の記録 → Discord への知らせ -----------------------------------------
   const notice = new NoticePoster(bridge, () => relay.lastThread, logger);
   /** 今の会話の session_id（自分のセッションの hook の記録で最後に見たもの）。!restart で同じ会話を開き直すのに使う */
@@ -727,6 +737,7 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
       session?.stop();
       files?.stop();
       keepalive?.stop();
+      presence?.stop();
       typing.stopAll();
       watchdog.stop();
       try {
@@ -754,6 +765,7 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
   logger.info('Discord ブリッジ稼働中');
   // 起動の途中で終了処理（stdin の終了など）が始まっていたら、それ以上は始めない（止めた後に投稿やタイマーを残さない）
   if (stopped === undefined) await inbox?.start();
+  if (stopped === undefined) presence?.start();
 
   return { stop };
 }
