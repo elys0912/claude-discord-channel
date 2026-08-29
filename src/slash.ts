@@ -1,11 +1,12 @@
 // スラッシュコマンド（/status など）。`!` で始まるブリッジのコマンドを、Discord の入力欄の補完から選べるようにする。
 // 定義（Discord に登録する JSON）と、押されたコマンドの検証・解釈を持つ純関数群（I/O なし。登録と受信は discord.ts）。
 import { ApplicationCommandOptionType, ApplicationCommandType, ApplicationIntegrationType, InteractionContextType } from 'discord.js';
-import type { RESTPostAPIChatInputApplicationCommandsJSONBody } from 'discord.js';
+import type { RESTPostAPIChatInputApplicationCommandsJSONBody, RESTPostAPIContextMenuApplicationCommandsJSONBody } from 'discord.js';
 import type { Command } from './app.js';
 import type { ParsedAccess } from './config.js';
 
 type SlashDefinition = RESTPostAPIChatInputApplicationCommandsJSONBody;
+type AppCommandDefinition = SlashDefinition | RESTPostAPIContextMenuApplicationCommandsJSONBody;
 
 /** サーバーとボットとの DM の両方で使う（ほかの人の DM やグループには出さない） */
 const CONTEXTS = [InteractionContextType.Guild, InteractionContextType.BotDM];
@@ -58,6 +59,32 @@ export const SLASH_COMMANDS: readonly SlashDefinition[] = [
   simple('lock', '「このセッション中は全部許可」を解除する'),
 ];
 
+/** メッセージの右クリックメニュー（アプリ）の名前 */
+export const FORWARD_COMMAND_NAME = 'Claude に渡す';
+
+/** メッセージの右クリックメニュー。選んだメッセージを Claude に渡す */
+export const FORWARD_COMMAND: RESTPostAPIContextMenuApplicationCommandsJSONBody = {
+  type: ApplicationCommandType.Message,
+  name: FORWARD_COMMAND_NAME,
+  contexts: CONTEXTS,
+  integration_types: [ApplicationIntegrationType.GuildInstall],
+};
+
+/** Discord に登録するコマンドすべて（スラッシュコマンドと右クリックメニュー） */
+export const APP_COMMANDS: readonly AppCommandDefinition[] = [...SLASH_COMMANDS, FORWARD_COMMAND];
+
+/** コマンドを使ってよい人と場所か。だめならその理由 */
+export function checkUse(
+  input: Pick<SlashInput, 'guildId' | 'userId' | 'conversationId'>,
+  access: ParsedAccess,
+  allowedConversations: ReadonlySet<string>
+): string | undefined {
+  if (input.guildId !== null && input.guildId !== access.guildId) return 'guild_mismatch';
+  if (!access.allowFrom.includes(input.userId)) return 'user_not_allowed';
+  if (!allowedConversations.has(input.conversationId)) return 'channel_not_allowed';
+  return undefined;
+}
+
 export interface SlashInput {
   name: string;
   /** keepalive の mode */
@@ -78,9 +105,8 @@ export type SlashParse = { ok: true; command: Command } | { ok: false; reason: s
  * サーバーの中なら guildId が access.guildId → 使った人が allowFrom → 場所が許可した DM・チャンネル → 知っているコマンドか
  */
 export function parseSlashCommand(input: SlashInput, access: ParsedAccess, allowedConversations: ReadonlySet<string>): SlashParse {
-  if (input.guildId !== null && input.guildId !== access.guildId) return { ok: false, reason: 'guild_mismatch' };
-  if (!access.allowFrom.includes(input.userId)) return { ok: false, reason: 'user_not_allowed' };
-  if (!allowedConversations.has(input.conversationId)) return { ok: false, reason: 'channel_not_allowed' };
+  const refused = checkUse(input, access, allowedConversations);
+  if (refused) return { ok: false, reason: refused };
 
   switch (input.name) {
     case 'help':
@@ -109,15 +135,17 @@ export function slashEcho(command: Command): string {
 }
 
 /**
- * 登録済みのコマンドと SLASH_COMMANDS が同じか。同じなら登録し直さない（起動のたびに書き換えないため）。
+ * 登録済みのコマンドと APP_COMMANDS が同じか。同じなら登録し直さない（起動のたびに書き換えないため）。
  * Discord が足す項目（id・version など）は比べない
  */
-export function sameCommands(registered: readonly unknown[], wanted: readonly SlashDefinition[] = SLASH_COMMANDS): boolean {
+export function sameCommands(registered: readonly unknown[], wanted: readonly AppCommandDefinition[] = APP_COMMANDS): boolean {
   const shape = (c: unknown): string => {
     const r = c as Partial<SlashDefinition>;
     return JSON.stringify({
+      type: r.type ?? ApplicationCommandType.ChatInput,
       name: r.name,
-      description: r.description,
+      // 右クリックメニューの説明は、Discord が空文字で返す
+      description: r.description ?? '',
       options: (r.options ?? []).map((o) => {
         const opt = o as { type: number; name: string; description: string; required?: boolean; choices?: { name: string; value: unknown }[] };
         return {

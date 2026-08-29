@@ -9,12 +9,12 @@ import type { Card } from '../../src/card.js';
 import { chunkText } from '../../src/chunk.js';
 import type { ParsedAccess } from '../../src/config.js';
 import { neutralizeBroadcasts } from '../../src/format.js';
-import { EventDedupe, conversationOf, gate, threadOf } from '../../src/gate.js';
+import { EventDedupe, conversationOf, forwardDelivery, gate, threadOf } from '../../src/gate.js';
 import type { FileInfo, InboundMessage } from '../../src/gate.js';
 import { DEFAULT_LONG_REPLY_CHARS, toLongReply } from '../../src/long-reply.js';
 import { parseInteraction } from '../../src/permission.js';
 import type { PresenceState } from '../../src/presence.js';
-import { parseSlashCommand, slashEcho } from '../../src/slash.js';
+import { checkUse, parseSlashCommand, slashEcho } from '../../src/slash.js';
 
 export const GUILD = '100000000000000001';
 export const USER1 = '200000000000000001';
@@ -319,6 +319,37 @@ export class FakeDiscord implements AppBridge {
     }
     const echo = this.record({ method: 'postText', channel: conversation, threadTs: opts.thread, text: slashEcho(parsed.command) });
     await this.handlers.onCommand?.(parsed.command, { userId: user, channelId: conversation, messageTs: echo, threadTs: opts.thread });
+  }
+
+  /**
+   * 右クリックメニュー「Claude に渡す」（本物の DiscordBridge.answerForward と同じく checkUse を通し、渡したことを一言返してから渡す）。
+   * target は選ばれたメッセージ。使えなければ本人にだけ見える返事を ephemeral に残して何もしない
+   */
+  async forward(target: InboundMessage, opts: PressOptions = {}): Promise<void> {
+    if (!this.handlers) return;
+    const user = opts.user ?? USER1;
+    const conversation = conversationOf(target);
+    const refused = checkUse({ guildId: target.guildId, userId: user, conversationId: conversation }, this.access, this.allowed);
+    if (refused) {
+      this.ephemeral.push(refused);
+      return;
+    }
+    const inThread = target.kind === 'thread' ? target.channelId : undefined;
+    const echo = this.record({ method: 'postText', channel: conversation, threadTs: inThread, text: `📨 Claude に渡した: ${target.messageId}` });
+    const replyTo = inThread ?? echo;
+    await this.handlers.onMessage(forwardDelivery(target, user, replyTo), { channel: conversation, ts: target.messageId, threadTs: replyTo, user });
+  }
+
+  /** 受信の判定を通さずに、メッセージの形だけを作る（forward の対象などに使う） */
+  makeMessage(text: string, opts: MessageOptions & { kind?: 'dm' | 'channel' | 'thread' } = {}): InboundMessage {
+    const kind = opts.kind ?? 'dm';
+    const place =
+      kind === 'dm'
+        ? { kind, guildId: null, channelId: opts.channel ?? DM1, parentId: undefined }
+        : kind === 'channel'
+          ? { kind, guildId: GUILD, channelId: opts.channel ?? CH, parentId: undefined }
+          : { kind, guildId: GUILD, channelId: opts.thread ?? '599999999999999998', parentId: opts.channel ?? CH };
+    return this.message(text, opts, place);
   }
 
   private message(

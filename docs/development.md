@@ -49,7 +49,7 @@ GitHub Actions（`.github/workflows/ci.yml`）は、main への push と pull re
 | `src/app.ts` | Discord・MCP・実行許可のリレーの配線（通常モードと縮退モード）、MCP ツールと受信イベントの処理、`!` コマンド |
 | `src/discord.ts` | Discord との出入り口。Gateway での受信、REST での送信、スレッドの作成と記憶、ステータス表示、添付の取得 |
 | `src/card.ts` | 中立な `Card` 型と、Discord の embed・ボタン・メニューへの変換（文字数と個数の上限を守る） |
-| `src/slash.ts` | スラッシュコマンドの定義（登録する JSON）と、使われたコマンドの検証・解釈（純関数） |
+| `src/slash.ts` | スラッシュコマンドと右クリックメニューの定義（登録する JSON）と、使われたコマンドの検証・解釈（純関数） |
 | `src/mcp.ts` | MCP channel サーバー（`reply` / `react` / `edit_message` / `download_file` / `send_file` / `progress` ツール） |
 | `src/placeholder.ts` | 待つだけの `discordbridge`。起動スクリプトが local スコープに登録し、普段のセッションで読み込まれる |
 | `src/permission-relay.ts` | 実行許可のリレーの状態管理（配信・回答・結果の表示への書き換え・自動 deny） |
