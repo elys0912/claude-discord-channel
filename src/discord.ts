@@ -567,16 +567,19 @@ export class DiscordBridge {
    * - サーバー: threadTs のスレッドがあればそこ、無ければ threadTs のメッセージからスレッドを作る。作れなければ元メッセージへの返信
    */
   private async resolveTarget(conversation: string, threadTs: string | undefined): Promise<{ channel: SendableChannels; replyTo?: string }> {
-    const base = await this.sendable(conversation);
-    if (threadTs === undefined) return { channel: base };
-    if (base.type === ChannelType.DM) return { channel: base, replyTo: threadTs };
-    if (base.type !== ChannelType.GuildText && base.type !== ChannelType.GuildAnnouncement) return { channel: base, replyTo: threadTs };
+    if (threadTs === undefined) return { channel: await this.sendable(conversation) };
+    if (this.dmChannelIds().has(conversation)) return { channel: await this.sendable(conversation), replyTo: threadTs };
 
+    // 既にあるスレッドならそこに送る。フォーラムの投稿もスレッドなので、親（フォーラム）に直接は送れなくても届く。
+    // スレッドは許可した会話（親）の中にあるものだけ使う
     const existing = await this.client.channels.fetch(threadTs).catch(() => null);
-    if (existing?.isThread() && existing.isSendable()) {
+    if (existing?.isThread() && existing.isSendable() && existing.parentId === conversation) {
       this.activeThreads.set(existing.id, true);
       return { channel: existing };
     }
+    const base = await this.sendable(conversation);
+    if (base.type === ChannelType.DM) return { channel: base, replyTo: threadTs };
+    if (base.type !== ChannelType.GuildText && base.type !== ChannelType.GuildAnnouncement) return { channel: base, replyTo: threadTs };
     try {
       const origin = await base.messages.fetch(threadTs);
       const thread = origin.thread ?? (await origin.startThread({ name: threadName(origin.content), autoArchiveDuration: 1440 }));
