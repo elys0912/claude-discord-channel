@@ -9,11 +9,14 @@ import {
   Client,
   Events,
   GatewayIntentBits,
+  MessageFlags,
   MessageType,
   Partials,
+  Routes,
 } from 'discord.js';
 import type {
   Channel,
+  ChatInputCommandInteraction,
   Interaction,
   Message,
   MessageCreateOptions,
@@ -34,6 +37,8 @@ import { parseInteraction } from './permission.js';
 import { PRESENCE_VIEW } from './presence.js';
 import type { PresenceState } from './presence.js';
 import type { ActionParse } from './permission.js';
+import type { Command } from './app.js';
+import { SLASH_COMMANDS, parseSlashCommand, sameCommands, slashEcho } from './slash.js';
 
 /** 1 通の上限（2000 字）に、コードブロックを閉じ直す分の余裕を持たせる */
 export const TEXT_CHUNK_MAX = 1900;
@@ -75,6 +80,11 @@ export interface ActionContext {
 export interface DiscordBridgeEvents {
   onMessage: (r: GateResult, raw: InboundRef) => void | Promise<void>;
   onAction: (parsed: ActionParse, ctx: ActionContext) => void | Promise<void>;
+  /**
+   * スラッシュコマンドが使われたとき（検証済み）。ctx.messageTs は、使ったことを残すためにボットが返した一言のメッセージ。
+   * 省略時はスラッシュコマンドに何もしない
+   */
+  onCommand?: ((command: Command, ctx: ActionContext) => void | Promise<void>) | undefined;
   /** 保留中の permission request か（gate に渡す。省略時は `yes xxxxx` の形なら常に verdict） */
   isKnownRequest?: ((requestId: string) => boolean) | undefined;
 }
@@ -286,6 +296,7 @@ export class DiscordBridge {
     if (this.dmChannels.size === 0 && (this.access.channels ?? []).length === 0) {
       throw new Error('許可ユーザーの DM を 1 つも開けず、access.json の channels も無い');
     }
+    await this.registerCommands();
     return { botUserId: user.id, botTag: user.tag, guildName: guild.name, dmChannelCount: this.dmChannels.size };
   }
 
@@ -325,6 +336,15 @@ export class DiscordBridge {
     this.client.on(Events.Error, (e) => this.logger.error('discord.js のエラー', e));
     this.client.on(Events.MessageCreate, (message) => this.enqueue(() => this.handleMessage(message)));
     this.client.on(Events.InteractionCreate, (interaction) => {
+      if (interaction.isChatInputCommand()) {
+        // スラッシュコマンドも 3 秒以内に応答が要るので、検証と一言の返信は列を待たずに済ませ、コマンドの処理だけを列に積む
+        const answered = this.answerSlash(interaction);
+        this.enqueue(async () => {
+          const used = await answered;
+          if (used && this.handlers?.onCommand) await this.handlers.onCommand(used.command, used.ctx);
+        });
+        return;
+      }
       // ボタンの応答は 3 秒以内に返す必要があるので、列を待たずにすぐ受け取ったことを返す
       const acked = this.ack(interaction);
       this.enqueue(async () => {
@@ -410,6 +430,71 @@ export class DiscordBridge {
       messageTs: interaction.message.id,
       threadTs: kind === 'thread' ? channel.id : undefined,
     });
+  }
+
+  // --- スラッシュコマンド -----------------------------------------------------
+
+  /**
+   * SLASH_COMMANDS をアプリのコマンドとして登録する（サーバーとボットとの DM の両方に出る）。
+   * 登録済みのものと同じなら何もしない。失敗しても投げない（`!` のコマンドは使えるので、ログに残して続ける）
+   */
+  private async registerCommands(): Promise<void> {
+    const appId = this.client.application?.id;
+    if (!appId) return;
+    try {
+      const route = Routes.applicationCommands(appId);
+      const registered = (await this.client.rest.get(route)) as unknown[];
+      if (sameCommands(registered)) return;
+      await this.client.rest.put(route, { body: SLASH_COMMANDS });
+      this.logger.info(`スラッシュコマンドを登録した 件数=${SLASH_COMMANDS.length}`);
+    } catch (e) {
+      this.logger.warn('スラッシュコマンドの登録に失敗（! のコマンドは使える）', errMessage(e));
+    }
+  }
+
+  /**
+   * スラッシュコマンドを検証し、使ってよければ使ったことを一言返して、その返信を返信先にした場所を返す。
+   * 使えない人・場所なら本人にだけ見える返事をして undefined。投げない
+   */
+  private async answerSlash(interaction: ChatInputCommandInteraction): Promise<{ command: Command; ctx: ActionContext } | undefined> {
+    try {
+      const channel = interaction.channel ?? (await this.client.channels.fetch(interaction.channelId).catch(() => null));
+      const kind = channel ? channelKind(channel) : interaction.guildId === null ? 'dm' : 'other';
+      const parentId = kind === 'thread' && channel && 'parentId' in channel ? (channel.parentId ?? '') : undefined;
+      const conversationId = kind === 'thread' ? (parentId ?? '') : interaction.channelId;
+      const parsed = parseSlashCommand(
+        {
+          name: interaction.commandName,
+          mode: interaction.options.getString('mode'),
+          force: interaction.options.getBoolean('force'),
+          guildId: interaction.guildId ?? null,
+          userId: interaction.user.id,
+          conversationId,
+        },
+        this.access,
+        this.allowedConversations
+      );
+      if (!parsed.ok) {
+        this.logger.warn(`スラッシュコマンドを無視 reason=${parsed.reason} user=${interaction.user.id}`);
+        await interaction.reply({ content: '⚠️ ここでは、このボットのコマンドは使えない', flags: MessageFlags.Ephemeral });
+        return undefined;
+      }
+      await interaction.reply({ content: slashEcho(parsed.command), allowedMentions: NO_MENTIONS });
+      const echo = await interaction.fetchReply();
+      this.locations.set(echo.id, echo.channelId);
+      return {
+        command: parsed.command,
+        ctx: {
+          userId: interaction.user.id,
+          channelId: conversationId,
+          messageTs: echo.id,
+          threadTs: kind === 'thread' ? interaction.channelId : undefined,
+        },
+      };
+    } catch (e) {
+      this.logger.warn('スラッシュコマンドへの応答に失敗', errMessage(e));
+      return undefined;
+    }
   }
 
   /** そのスレッドにボットが関わっているか */
