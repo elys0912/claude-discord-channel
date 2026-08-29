@@ -35,7 +35,7 @@ GitHub Actions（`.github/workflows/ci.yml`）は、main への push と pull re
 3. **システムテスト（実機）**: 手元の Discord サーバーと Claude Code で、機能を入れるたびに確かめる。
    - DM と許可チャンネルで、受信（👀）・入力中の表示・返信が届くこと。チャンネルではスレッドが作られ、スレッドの中ではメンションなしでも届くこと。
    - 実行許可のカードが出て、ボタンとテキスト（`yes xxxxx`）の両方で答えられること。
-   - `!status` / `!screen` / `!stop` / `!keepalive` / `!rules` / `!restart` が動くこと。
+   - `!status` / `!screen` / `!stop` / `!keepalive` / `!rules` / `!restart` が動くこと。スラッシュコマンドが DM とチャンネルで動くこと（ブラウザ版では入力欄に打っても候補が出ないので、入力欄の右のアプリのボタンから検索して選ぶ）。
    - テキストの添付が本文に差し込まれること。`download_file` で保存・展開でき、保存の前に実行許可のカードが出ること。
    - `send_file` で、`UPLOAD_DIRS` の中は確認なしで、外は確認のカードを経て送られること。
    - hook の通知（セッションの開始など）が、そのセッション自身の状態ディレクトリに書かれ、そのボットにだけ出ること。
@@ -49,6 +49,7 @@ GitHub Actions（`.github/workflows/ci.yml`）は、main への push と pull re
 | `src/app.ts` | Discord・MCP・実行許可のリレーの配線（通常モードと縮退モード）、MCP ツールと受信イベントの処理、`!` コマンド |
 | `src/discord.ts` | Discord との出入り口。Gateway での受信、REST での送信、スレッドの作成と記憶、ステータス表示、添付の取得 |
 | `src/card.ts` | 中立な `Card` 型と、Discord の embed・ボタン・メニューへの変換（文字数と個数の上限を守る） |
+| `src/slash.ts` | スラッシュコマンドの定義（登録する JSON）と、使われたコマンドの検証・解釈（純関数） |
 | `src/mcp.ts` | MCP channel サーバー（`reply` / `react` / `edit_message` / `download_file` / `send_file` ツール） |
 | `src/placeholder.ts` | 待つだけの `discordbridge`。起動スクリプトが local スコープに登録し、普段のセッションで読み込まれる |
 | `src/permission-relay.ts` | 実行許可のリレーの状態管理（配信・回答・結果の表示への書き換え・自動 deny） |

@@ -14,6 +14,7 @@ import type { FileInfo, InboundMessage } from '../../src/gate.js';
 import { DEFAULT_LONG_REPLY_CHARS, toLongReply } from '../../src/long-reply.js';
 import { parseInteraction } from '../../src/permission.js';
 import type { PresenceState } from '../../src/presence.js';
+import { parseSlashCommand, slashEcho } from '../../src/slash.js';
 
 export const GUILD = '100000000000000001';
 export const USER1 = '200000000000000001';
@@ -93,6 +94,8 @@ export interface PressOptions {
 export class FakeDiscord implements AppBridge {
   readonly calls: Call[] = [];
   readonly presence: PresenceState[] = [];
+  /** 使えなかったスラッシュコマンドの理由（本人にだけ見える返事の代わり） */
+  readonly ephemeral: string[] = [];
   /** 次の送信（postText / postCard / sendFiles）を失敗させる条件 */
   failPost: ((channel: string) => Error | undefined) | undefined;
   /** start() を失敗させる */
@@ -288,6 +291,34 @@ export class FakeDiscord implements AppBridge {
       this.allowed
     );
     await this.handlers.onAction(parsed, { userId: user, channelId: conversation, messageTs: opts.message ?? '8001', threadTs: opts.thread });
+  }
+
+  /**
+   * スラッシュコマンドを使う（本物の DiscordBridge.answerSlash と同じく parseSlashCommand を通し、使ったことを一言返してから渡す）。
+   * 使えなければ本人にだけ見える返事を ephemeral に残して何もしない
+   */
+  async slash(name: string, opts: PressOptions & { mode?: string | undefined; force?: boolean | undefined } = {}): Promise<void> {
+    if (!this.handlers) return;
+    const user = opts.user ?? USER1;
+    const conversation = opts.conversation ?? DM1;
+    const parsed = parseSlashCommand(
+      {
+        name,
+        mode: opts.mode,
+        force: opts.force,
+        guildId: opts.guildId !== undefined ? opts.guildId : conversation === CH ? GUILD : null,
+        userId: user,
+        conversationId: conversation,
+      },
+      this.access,
+      this.allowed
+    );
+    if (!parsed.ok) {
+      this.ephemeral.push(parsed.reason);
+      return;
+    }
+    const echo = this.record({ method: 'postText', channel: conversation, threadTs: opts.thread, text: slashEcho(parsed.command) });
+    await this.handlers.onCommand?.(parsed.command, { userId: user, channelId: conversation, messageTs: echo, threadTs: opts.thread });
   }
 
   private message(
