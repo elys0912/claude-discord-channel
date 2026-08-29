@@ -1451,3 +1451,55 @@ describe('スラッシュコマンド', () => {
     expect(h.discord.calls).toEqual([]);
   });
 });
+
+describe('TODO の進み具合（progress ツール）', () => {
+  let h: Harness;
+  const boards = () => h.discord.calls.filter((c) => (c.method === 'postCard' || c.method === 'updateCard') && cardText(c.card).includes('📋 TODO'));
+  const progress = (items: { content: string; status: string }[], thread_id = '9500') =>
+    h.client.callTool({ name: 'progress', arguments: { chat_id: DM1, thread_id, items } });
+
+  afterEach(async () => {
+    await h.client.close();
+    await h.stop();
+  });
+
+  it('返信先に 1 枚出して以後は書き換え、次に話しかけられたら新しいカードにする', async () => {
+    h = await startHarness(ACCESS, undefined, { todoProgress: true });
+    await h.discord.dm('作業して', { id: '9500' });
+    await flush();
+
+    const first = await progress([
+      { content: '調べる', status: 'in_progress' },
+      { content: '直す', status: 'pending' },
+    ]);
+    expect(first.content).toEqual([{ type: 'text', text: 'posted (0/2 completed)' }]);
+    const second = await progress([
+      { content: '調べる', status: 'completed' },
+      { content: '直す', status: 'completed' },
+    ]);
+    expect(second.content).toEqual([{ type: 'text', text: 'updated (2/2 completed)' }]);
+    expect(boards().map((c) => [c.method, c.channel, c.threadTs ?? c.ts])).toEqual([
+      ['postCard', DM1, '9500'],
+      ['updateCard', DM1, boards()[0]?.ts],
+    ]);
+    expect(cardText(boards()[1]?.card)).toContain('2/2 完了');
+
+    await h.discord.dm('次の作業', { id: '9600' });
+    await flush();
+    await progress([{ content: '次', status: 'pending' }], '9600');
+    expect(boards().at(-1)).toMatchObject({ method: 'postCard', threadTs: '9600' });
+  });
+
+  it('状態が不正・空の一覧はツールのエラーにする', async () => {
+    h = await startHarness(ACCESS, undefined, { todoProgress: true });
+    expect((await progress([{ content: 'a', status: 'done' }])).isError).toBe(true);
+    expect((await progress([])).isError).toBe(true);
+    expect(boards()).toEqual([]);
+  });
+
+  it('TODO_PROGRESS=off なら progress ツールを出さない', async () => {
+    h = await startHarness();
+    const tools = await h.client.listTools();
+    expect(tools.tools.map((t) => t.name)).not.toContain('progress');
+  });
+});

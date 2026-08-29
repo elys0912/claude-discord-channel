@@ -85,6 +85,8 @@ export interface Tokens {
   longReplyChars?: number;
   /** キャッシュのつなぎ止め（.env の KEEPALIVE / KEEPALIVE_AFTER_MIN / KEEPALIVE_MAX / KEEPALIVE_QUIET） */
   keepalive: { enabled: boolean; afterMin: number; max: number; quiet: QuietHours | undefined };
+  /** .env の TODO_PROGRESS。TODO の進み具合のカードを出すか（既定 on） */
+  todoProgress: boolean;
 }
 
 /**
@@ -97,6 +99,15 @@ function readInt(parsed: Record<string, string>, key: string, min: number, max: 
   const n = Number(raw);
   if (!Number.isInteger(n) || n < min || n > max) throw new Error(`${key} は ${min}〜${max} の整数で指定する`);
   return n;
+}
+
+/** .env の on / off の設定を読む。無い・空なら fallback。on / true / 1 か off / false / 0 でなければ投げる */
+function readSwitch(parsed: Record<string, string>, key: string, fallback: boolean): boolean {
+  const raw = (parsed[key] ?? '').trim();
+  if (raw === '') return fallback;
+  if (/^(on|true|1)$/i.test(raw)) return true;
+  if (/^(off|false|0)$/i.test(raw)) return false;
+  throw new Error(`${key} は on か off で指定する`);
 }
 
 /** キャッシュのつなぎ止めの設定。KEEPALIVE は既定で on（off / false / 0 で止める） */
@@ -141,7 +152,7 @@ export function loadTokens(dir: string): Tokens {
   const botToken = parsed.DISCORD_BOT_TOKEN;
   if (!botToken) throw new Error('DISCORD_BOT_TOKEN が設定されていない');
   if (!BOT_TOKEN_RE.test(botToken)) throw new Error('DISCORD_BOT_TOKEN の形が不正（Developer Portal の Bot で発行したトークンを貼る）');
-  const tokens: Tokens = { botToken, keepalive: readKeepalive(parsed) };
+  const tokens: Tokens = { botToken, keepalive: readKeepalive(parsed), todoProgress: readSwitch(parsed, 'TODO_PROGRESS', true) };
   const downloadDir = parsed.DOWNLOAD_DIR;
   if (downloadDir) {
     // 相対パスはカレントディレクトリ（起動したプロジェクト）次第で保存先が変わるので受け付けない
