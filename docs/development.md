@@ -50,7 +50,7 @@ GitHub Actions（`.github/workflows/ci.yml`）は、main への push と pull re
 | `src/discord.ts` | Discord との出入り口。Gateway での受信、REST での送信、スレッドの作成と記憶、ステータス表示、添付の取得 |
 | `src/card.ts` | 中立な `Card` 型と、Discord の embed・ボタン・メニューへの変換（文字数と個数の上限を守る） |
 | `src/slash.ts` | スラッシュコマンドの定義（登録する JSON）と、使われたコマンドの検証・解釈（純関数） |
-| `src/mcp.ts` | MCP channel サーバー（`reply` / `react` / `edit_message` / `download_file` / `send_file` ツール） |
+| `src/mcp.ts` | MCP channel サーバー（`reply` / `react` / `edit_message` / `download_file` / `send_file` / `progress` ツール） |
 | `src/placeholder.ts` | 待つだけの `discordbridge`。起動スクリプトが local スコープに登録し、普段のセッションで読み込まれる |
 | `src/permission-relay.ts` | 実行許可のリレーの状態管理（配信・回答・結果の表示への書き換え・自動 deny） |
 | `src/permission.ts` | 実行許可のカードの組み立てと、ボタン・メニュー操作の検証（`custom_id` の分解。純関数） |
@@ -60,6 +60,7 @@ GitHub Actions（`.github/workflows/ci.yml`）は、main への push と pull re
 | `src/typing.ts` | 「入力中…」の表示 |
 | `src/presence.ts` | ボットのステータス表示の状態の決定と、更新の間引き |
 | `src/keepalive.ts` | キャッシュのつなぎ止め |
+| `src/todo.ts` | `progress` ツールの実体（TODO の進み具合のカードの組み立てと、出したカードの書き換え） |
 | `src/inline-text.ts` | テキストの添付を本文に差し込む |
 | `src/long-reply.ts` | 長い返信を、冒頭の本文と全文の添付に分ける |
 | `src/send-file.ts` | `send_file` の実体（秘密のファイルの拒否、`UPLOAD_DIRS` の判定、確認のカード） |
