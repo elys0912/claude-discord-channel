@@ -2,6 +2,7 @@
 // relay 群は Discord の型を知らず Card だけを組む。上限（文字数・ボタンの数）はここで守る。
 import { ButtonStyle, ComponentType, escapeMarkdown } from 'discord.js';
 import type { APIActionRowComponent, APIComponentInMessageActionRow, APIEmbed } from 'discord.js';
+import { clip } from './text.js';
 
 /** Discord の上限（https://docs.discord.com/developers/resources/message の embed とコンポーネントの節） */
 export const LIMITS = {
@@ -67,11 +68,7 @@ export function md(text: string): string {
 
 /** 末尾を … にして max 文字に収める（サロゲートペアの途中では切らない） */
 export function clipTo(text: string, max: number): { text: string; clipped: boolean } {
-  if (text.length <= max) return { text, clipped: false };
-  let cut = Math.max(0, max - 1);
-  const code = text.charCodeAt(cut - 1);
-  if (code >= 0xd800 && code <= 0xdbff) cut -= 1;
-  return { text: text.slice(0, cut) + '…', clipped: true };
+  return { text: clip(text, max), clipped: text.length > max };
 }
 
 /**

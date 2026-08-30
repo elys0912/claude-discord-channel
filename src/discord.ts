@@ -42,6 +42,7 @@ import type { ActionParse } from './permission.js';
 import type { Command } from './commands.js';
 import { APP_COMMANDS, FORWARD_COMMAND_NAME, checkUse, parseSlashCommand, sameCommands, slashEcho } from './slash.js';
 import { BoundedMap } from './bounded-map.js';
+import { truncateUnits } from './text.js';
 
 /** 1 通の上限（2000 字）に、コードブロックを閉じ直す分の余裕を持たせる */
 export const TEXT_CHUNK_MAX = 1900;
@@ -232,8 +233,7 @@ export function threadName(content: string): string {
   const oneLine = content.replace(/<@!?\d+>/g, '').replace(/\s+/g, ' ').trim();
   if (oneLine === '') return 'Claude';
 
-  const head = oneLine.slice(0, THREAD_NAME_MAX);
-  return /[\uD800-\uDBFF]$/.test(head) ? head.slice(0, -1) : head;
+  return truncateUnits(oneLine, THREAD_NAME_MAX);
 }
 
 export class DiscordBridge {
