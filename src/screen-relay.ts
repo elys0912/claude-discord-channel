@@ -8,7 +8,7 @@ import type { DiscordBridge } from './discord.js';
 import type { Logger } from './log.js';
 import { redact } from './log.js';
 import { errMessage } from './errors.js';
-import { textCard } from './notice.js';
+import { rewriteAsTextCard, textCard } from './notice.js';
 import { choiceFingerprint, keysToSelect, parseChoiceScreen, screenTail } from './screen.js';
 import type { ChoiceScreen } from './screen.js';
 import { newToken } from './text.js';
@@ -121,9 +121,8 @@ export class ScreenRelay {
   /** 結果を知らせる。押されたメッセージが分かればそれを書き換え、分からなければスレッドに投稿する。投げない */
   private async report(pressed: PressedMessage, message: string, color: CardColor): Promise<void> {
     if (pressed.ts) {
-      await this.bridge
-        .updateCard(pressed.channel, pressed.ts, textCard(message, color))
-        .catch((e: unknown) => this.logger.warn('選択画面の表示の書き換えに失敗', e));
+      const deps = { bridge: this.bridge, logger: this.logger };
+      await rewriteAsTextCard(deps, { channel: pressed.channel, ts: pressed.ts }, message, color, '選択画面の表示の書き換えに失敗');
     } else {
       await this.bridge.postText(pressed.channel, message, pressed.threadTs).catch(() => undefined);
     }

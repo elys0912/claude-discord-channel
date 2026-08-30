@@ -10,7 +10,7 @@ import type { Card, CardColor } from './card.js';
 import type { DiscordBridge } from './discord.js';
 import { errMessage } from './errors.js';
 import type { Logger } from './log.js';
-import { textCard } from './notice.js';
+import { rewriteAsTextCard } from './notice.js';
 import { ACTION, customId } from './permission.js';
 import { newToken } from './text.js';
 import type { PressedMessage } from './types.js';
@@ -261,9 +261,7 @@ export class FileSender {
 
   private async report(pressed: PressedMessage, text: string, color: CardColor): Promise<void> {
     if (!pressed.ts) return;
-    await this.opts.bridge.updateCard(pressed.channel, pressed.ts, textCard(text, color)).catch((e: unknown) => {
-      this.opts.logger.warn('ファイル送信の確認の書き換えに失敗', e);
-    });
+    await rewriteAsTextCard(this.opts, { channel: pressed.channel, ts: pressed.ts }, text, color, 'ファイル送信の確認の書き換えに失敗');
   }
 
   /** 終了時。確認待ちのタイマーを止める（送らない） */

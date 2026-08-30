@@ -13,6 +13,22 @@ export function textCard(text: string, color: CardColor = 'info'): Card {
   return { color, body: md(text) };
 }
 
+/**
+ * ボタンを押されたメッセージを、結果を知らせる 1 行のカードに書き換える。
+ * 失敗しても投げず、failureLog をログに残す（結果の表示が出ないだけで、操作そのものは済んでいるため）
+ */
+export async function rewriteAsTextCard(
+  deps: { bridge: Pick<DiscordBridge, 'updateCard'>; logger: Logger },
+  message: { channel: string; ts: string },
+  text: string,
+  color: CardColor,
+  failureLog: string
+): Promise<void> {
+  await deps.bridge.updateCard(message.channel, message.ts, textCard(text, color)).catch((e: unknown) => {
+    deps.logger.warn(failureLog, e);
+  });
+}
+
 export class NoticePoster {
   private readonly bridge: NoticeBridge;
   private readonly threadOf: () => ThreadRef | undefined;
