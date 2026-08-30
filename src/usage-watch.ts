@@ -45,6 +45,11 @@ function reachedLevel(used: number, levels: readonly number[]): number | undefin
   return reached;
 }
 
+/** level が最上位のしきい値か。しきい値が 1 つだけなら、強い文面にはしないので false */
+function isTopLevel(level: number, levels: readonly number[]): boolean {
+  return level === levels.at(-1) && levels.length > 1;
+}
+
 export interface UsageWatchOptions {
   /** usage.json のパス */
   file: string;
@@ -98,7 +103,7 @@ export class UsageWatch {
     if (snapshot && (this.opts.sessionTag === undefined || snapshot.session_tag === this.opts.sessionTag)) {
       this.latest = snapshot;
     }
-    const messages = [...this.usageMessages(), ...this.contextMessages(), ...this.recoveredMessages()];
+    const messages = [...this.takeUsageMessages(), ...this.takeContextMessages(), ...this.takeRecoveredMessages()];
     for (const text of messages) {
       try {
         await this.opts.notify(text);
@@ -159,9 +164,9 @@ export class UsageWatch {
     return result;
   }
 
-  private usageMessages(): string[] {
+  /** 新しく越えたしきい値の知らせ。1 回だけ知らせるため、返した分は知らせた印（usageNotified）を進める */
+  private takeUsageMessages(): string[] {
     const levels = this.opts.usageWarnPct;
-    const top = levels.at(-1);
     const messages: string[] = [];
     for (const { key, label, window } of this.activeWindows()) {
       const level = reachedLevel(window.used, levels);
@@ -171,7 +176,7 @@ export class UsageWatch {
       const resets = formatTime(new Date(window.resets_at * 1000));
       const used = Math.round(window.used);
       messages.push(
-        level === top && levels.length > 1
+        isTopLevel(level, levels)
           ? `🛑 使用量（${label}）が ${used}%。重い作業は区切りのよいところで止める（リセット ${resets}）`
           : `⚠️ 使用量（${label}）が ${used}%（リセット ${resets}）`
       );
@@ -179,7 +184,8 @@ export class UsageWatch {
     return messages;
   }
 
-  private contextMessages(): string[] {
+  /** 新しく越えたコンテキストのしきい値の知らせ。返した分は知らせた印（contextNotified）を進める */
+  private takeContextMessages(): string[] {
     const s = this.latest;
     if (!s?.context) return [];
     // 会話が替わったら数え直す（SessionStart の知らせより先に usage.json が替わることがある）
@@ -193,13 +199,14 @@ export class UsageWatch {
     this.contextNotified = level;
     const used = Math.round(s.context.used);
     return [
-      level === levels.at(-1) && levels.length > 1
+      isTopLevel(level, levels)
         ? `⚠️ コンテキストが ${used}%。!compact（要約して縮める）か !clear（新しい会話）を勧める`
         : `ℹ️ コンテキストが ${used}%。区切りのよいところで !compact を検討する`,
     ];
   }
 
-  private recoveredMessages(): string[] {
+  /** 上限のリセット時刻を過ぎていれば、戻った知らせ。返したら上限の印を消す（limitCleared） */
+  private takeRecoveredMessages(): string[] {
     if (!this.limited || this.limitedUntil === undefined || this.now() < this.limitedUntil) return [];
     const at = formatTime(new Date(this.limitedUntil));
     this.limitCleared();
