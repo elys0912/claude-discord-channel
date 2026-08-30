@@ -10,6 +10,20 @@ export interface PermissionRequest {
   input_preview: string;
 }
 
+/** input_preview（JSON）の文字列の項目。JSON でない（省略されている等）・文字列でなければ undefined */
+export function inputField(req: PermissionRequest, field: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(req.input_preview);
+    if (typeof parsed === 'object' && parsed !== null) {
+      const value = (parsed as Record<string, unknown>)[field];
+      if (typeof value === 'string') return value;
+    }
+  } catch {
+    // 読めないときの扱い（ルールを作らない・当たりとみなす）は呼び出し側が決める
+  }
+  return undefined;
+}
+
 /** request_id の文字集合（小文字 5 文字、l を除く）。gate.ts の返信パターンもこれから組み立てる */
 export const PERMISSION_ID_BODY = '[a-km-z]{5}';
 export const PERMISSION_ID_RE = new RegExp(`^${PERMISSION_ID_BODY}$`);

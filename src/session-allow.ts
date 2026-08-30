@@ -6,8 +6,9 @@
 // このファイルは claude-slack-channel と claude-discord-channel で同じ内容にしている（直すときは両方を直す）。
 import path from 'node:path';
 import os from 'node:os';
-import type { PermissionRequest } from './permission.js';
-import { COMMAND_SEPARATOR_RE, denyDirOf, isSameOrAncestor, normalizeCommandName, toRulePath } from './allow-rules.js';
+import { inputField } from './permission-core.js';
+import type { PermissionRequest } from './permission-core.js';
+import { COMMAND_SEPARATOR_RE, RULE_RE, denyDirOf, isSameOrAncestor, normalizeCommandName, toRulePath } from './allow-rules.js';
 import type { DenyContext } from './allow-rules.js';
 
 const SHELL_TOOLS = new Set(['bash', 'powershell']);
@@ -50,24 +51,8 @@ const WRAPPER_COMMANDS = new Set([
 ]);
 /** ファイル名だけのパターンで、正規表現に直す前にエスケープする文字（* と ? はワイルドカードとして別に扱う） */
 const REGEX_SPECIAL_RE = /[.+^$()|]/g;
-/** Tool / Tool(中身) の形のルール */
-const RULE_RE = /^([A-Za-z][\w-]*)(?:\((.*)\))?$/;
 
-/** input_preview（JSON）の文字列の項目。JSON でない（省略されている等）・文字列でなければ undefined */
-function inputField(req: PermissionRequest, field: string): string | undefined {
-  try {
-    const parsed: unknown = JSON.parse(req.input_preview);
-    if (typeof parsed === 'object' && parsed !== null) {
-      const value = (parsed as Record<string, unknown>)[field];
-      if (typeof value === 'string') return value;
-    }
-  } catch {
-    // 中身が読めないときは呼び出し側で「当たる」とみなす
-  }
-  return undefined;
-}
-
-/** パスを取るツールのパス（file_path / path / notebook_path） */
+/** パスを取るツールのパス（file_path / path / notebook_path）。読めなければ undefined（呼び出し側で当たりとみなす） */
 function pathOf(req: PermissionRequest): string | undefined {
   return inputField(req, 'file_path') ?? inputField(req, 'path') ?? inputField(req, 'notebook_path');
 }

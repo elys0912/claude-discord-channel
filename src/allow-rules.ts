@@ -6,7 +6,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { PermissionRequest } from './permission.js';
+import { inputField } from './permission-core.js';
+import type { PermissionRequest } from './permission-core.js';
 import { stripBom } from './text.js';
 import { errMessage } from './errors.js';
 
@@ -107,26 +108,12 @@ const WEB_FETCH_DOMAIN_PREFIX = 'domain:';
 export const COMMAND_SEPARATOR_RE = /&&|\|\||[;|&\n\r`]|\$\(/;
 /** リダイレクトの記号 */
 const REDIRECT_RE = /[<>]/;
-/** Tool / Tool(中身) の形のルール */
-const RULE_RE = /^([A-Za-z][\w-]*)(?:\((.*)\))?$/;
+/** Tool / Tool(中身) の形のルール（session-allow.ts の ask との照合でも使う） */
+export const RULE_RE = /^([A-Za-z][\w-]*)(?:\((.*)\))?$/;
 
 export type RuleResult =
   | { ok: true; rule: string; tool: string; prefix: string | undefined }
   | { ok: false; reason: string; denyHits?: string[] };
-
-/** input_preview（JSON）の文字列の項目。JSON でない（省略されている等）・文字列でなければ undefined */
-function inputField(req: PermissionRequest, field: string): string | undefined {
-  try {
-    const parsed: unknown = JSON.parse(req.input_preview);
-    if (typeof parsed === 'object' && parsed !== null) {
-      const value = (parsed as Record<string, unknown>)[field];
-      if (typeof value === 'string') return value;
-    }
-  } catch {
-    // input_preview が JSON でない（省略されている等）ときは作らない
-  }
-  return undefined;
-}
 
 function commandOf(req: PermissionRequest): string | undefined {
   return inputField(req, 'command');
