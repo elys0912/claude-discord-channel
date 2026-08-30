@@ -30,6 +30,8 @@ import { FileSender } from './send-file.js';
 import { Keepalive, keepaliveStatusLine } from './keepalive.js';
 import type { QuietHours } from './keepalive.js';
 import { formatTime } from './text.js';
+import { UsageWatch } from './usage-watch.js';
+import { takeCrashNotice } from './crash-notice.js';
 import { TypingIndicator } from './typing.js';
 import { PresenceUpdater } from './presence.js';
 import { TodoBoard } from './todo.js';
@@ -592,6 +594,10 @@ export interface BridgeAppOptions {
   upload?: { dirs: string[]; maxBytes?: number | undefined; protectedDirs?: string[] | undefined } | undefined;
   /** TODO の進み具合のカードを出すか（.env の TODO_PROGRESS）。hook の記録（hookInboxFile）も要る。省略時は出さない */
   todoProgress?: boolean | undefined;
+  /** 使用量とコンテキストの見張り（statusline が書く usage.json としきい値）。省略時は見張らない */
+  usageWatch?: { file: string; usageWarnPct: number[]; contextWarnPct: number[]; pollMs?: number | undefined } | undefined;
+  /** start.ps1 が想定外の終了から起動し直したときに置く印（状態ディレクトリの crash.json）。起動後に読んで知らせ、消す */
+  crashFile?: string | undefined;
 }
 
 /**
@@ -676,7 +682,8 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
           ...opts.keepalive,
           send: () => server.pushMessage(KEEPALIVE_TEXT, { kind: 'keepalive' }),
           isBusy: () => turnActive || watchdog.isWaiting() || relay.pendingCount() > 0,
-          isLimited: () => limited,
+          // 使用量がしきい値を越えている間も送らない（合図でも使用量を使うため）
+          isLimited: () => limited || (usageWatch?.isHigh() ?? false),
           logger,
         })
       : undefined;
@@ -694,6 +701,14 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
   const notice = new NoticePoster(bridge, () => relay.lastThread, logger);
   /** 今の会話の session_id（自分のセッションの hook の記録で最後に見たもの）。!restart で同じ会話を開き直すのに使う */
   let sessionId: string | undefined;
+  const usageWatch = opts.usageWatch
+    ? new UsageWatch({
+        ...opts.usageWatch,
+        sessionTag: opts.sessionTag,
+        notify: (text) => notice.post(text),
+        logger,
+      })
+    : undefined;
   const inbox = opts.hookInboxFile
     ? new HookInbox({
         file: opts.hookInboxFile,
@@ -710,16 +725,24 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
               typing.stopAll();
               turnActive = false;
               limited = false;
+              usageWatch?.limitCleared();
               keepalive?.requestEnded(event.at);
               break;
             case 'StopFailure':
               typing.stopAll();
               turnActive = false;
-              if (event.error === 'rate_limit') limited = true;
+              if (event.error === 'rate_limit') {
+                limited = true;
+                usageWatch?.limitHit();
+              }
               keepalive?.requestEnded(event.at);
               break;
             case 'SessionStart':
               keepalive?.resetCount();
+              usageWatch?.contextReset();
+              break;
+            case 'PostCompact':
+              usageWatch?.contextReset();
               break;
             case 'SessionEnd':
               typing.stopAll();
@@ -749,7 +772,9 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
       pendingPermissions: relay.pendingCount(),
       lastHooks: inbox?.lastEvents(5) ?? [],
       sessionAllowSince: sessionAllow ? (sessionAllow.current?.since ?? null) : undefined,
-      extraLines: keepalive ? [keepaliveStatusLine(keepalive.status())] : undefined,
+      extraLines: [keepalive ? keepaliveStatusLine(keepalive.status()) : undefined, usageWatch?.statusLine()].filter(
+        (line): line is string => line !== undefined
+      ),
       now: new Date(),
     });
   };
@@ -789,6 +814,7 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
       session?.stop();
       files?.stop();
       keepalive?.stop();
+      usageWatch?.stop();
       presence?.stop();
       typing.stopAll();
       watchdog.stop();
@@ -822,6 +848,14 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
   // 起動の途中で終了処理（stdin の終了など）が始まっていたら、それ以上は始めない（止めた後に投稿やタイマーを残さない）
   if (stopped === undefined && ruleStore) await noticeRejectedRules(ruleStore, notice, logger);
   if (stopped === undefined) await inbox?.start();
+  if (stopped === undefined && opts.crashFile) {
+    const crashed = takeCrashNotice(opts.crashFile);
+    if (crashed) {
+      logger.warn('想定外の終了から起動し直した');
+      await notice.post(crashed);
+    }
+  }
+  if (stopped === undefined) usageWatch?.start();
   if (stopped === undefined) presence?.start();
 
   return { stop };

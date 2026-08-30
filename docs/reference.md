@@ -49,6 +49,10 @@
 | `KEEPALIVE_AFTER_MIN` | 55 | 最後の応答から合図を送るまでの分数 |
 | `KEEPALIVE_MAX` | 6 | 最後の会話から合図を送る回数の上限 |
 | `KEEPALIVE_QUIET` | `01:00-07:00` | 合図を送らない時間帯（`HH:MM-HH:MM`）。空なら時間帯なし |
+| `USAGE_WATCH` | on | 使用量とコンテキストの見張り。`off` で無効 |
+| `USAGE_WARN_PCT` | `80,95` | 使用量のしきい値（%、カンマ区切り）。空なら知らせない |
+| `CONTEXT_WARN_PCT` | `70,90` | コンテキストのしきい値（%、カンマ区切り）。空なら知らせない |
+| `AUTO_RESTART` | on | 想定外の終了で起動し直す（start.ps1 が読む）。`off` で無効 |
 | `TODO_PROGRESS` | on | TODO の進み具合のカードを出す `progress` ツールを出すか。`off` で出さない |
 
 ## 環境変数
