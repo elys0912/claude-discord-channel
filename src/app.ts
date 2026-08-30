@@ -656,36 +656,8 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
   const relay: PermissionRelay = new PermissionRelay(bridge, server, logger, undefined, sessionAllow);
   const startedAt = new Date();
 
-  // --- キャッシュのつなぎ止め ------------------------------------------------------
-  /** Claude がターンの途中（中継してから、または手元で入力してから Stop まで） */
-  let turnActive = false;
-  /** 使用量の上限に当たっている（StopFailure の rate_limit から、次に応答が終わるまで） */
-  let limited = false;
-  const keepalive =
-    opts.keepalive && opts.hookInboxFile
-      ? new Keepalive({
-          ...opts.keepalive,
-          send: () => server.pushMessage(KEEPALIVE_TEXT, { kind: 'keepalive' }),
-          isBusy: () => turnActive || watchdog.isWaiting() || relay.pendingCount() > 0,
-          // 使用量がしきい値を越えている間も送らない（合図でも使用量を使うため）
-          isLimited: () => limited || (usageWatch?.isHigh() ?? false),
-          logger,
-        })
-      : undefined;
-
-  // --- ボットのステータス表示 -------------------------------------------------------
-  const presence = bridge.setPresence
-    ? new PresenceUpdater({
-        inputs: () => ({ limited, pendingPermissions: relay.pendingCount(), working: turnActive }),
-        apply: (state) => bridge.setPresence?.(state),
-        logger,
-      })
-    : undefined;
-
-  // --- hook の記録 → Discord への知らせ -----------------------------------------
+  const turn = new TurnState();
   const notice = new NoticePoster(bridge, () => relay.lastThread, logger);
-  /** 今の会話の session_id（自分のセッションの hook の記録で最後に見たもの）。!restart で同じ会話を開き直すのに使う */
-  let sessionId: string | undefined;
   const usageWatch = opts.usageWatch
     ? new UsageWatch({
         ...opts.usageWatch,
@@ -694,77 +666,19 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
         logger,
       })
     : undefined;
-  const inbox = opts.hookInboxFile
-    ? new HookInbox({
-        file: opts.hookInboxFile,
-        logger,
-        pollMs: opts.hookPollMs,
-        sessionTag: opts.sessionTag,
-        onEvent: async (event) => {
-          if (event.session_id) sessionId = event.session_id;
-          switch (event.hook_event_name) {
-            case 'UserPromptSubmit':
-              turnActive = true;
-              break;
-            case 'Stop':
-              typing.stopAll();
-              turnActive = false;
-              limited = false;
-              usageWatch?.limitCleared();
-              keepalive?.requestEnded(event.at);
-              break;
-            case 'StopFailure':
-              typing.stopAll();
-              turnActive = false;
-              if (event.error === 'rate_limit') {
-                limited = true;
-                usageWatch?.limitHit();
-              }
-              keepalive?.requestEnded(event.at);
-              break;
-            case 'SessionStart':
-              keepalive?.resetCount();
-              usageWatch?.contextReset();
-              break;
-            case 'PostCompact':
-              usageWatch?.contextReset();
-              break;
-            case 'SessionEnd':
-              typing.stopAll();
-              break;
-          }
-          // !clear などで新しい会話になったら、「全部許可」を解除する（会話ごとに許可し直す）
-          if (event.hook_event_name === 'SessionStart' && event.source === 'clear' && sessionAllow?.disable()) {
-            logger.info('全部許可を解除（新しい会話）');
-            await notice.post('🔒 新しい会話になったので「このセッション中は全部許可」を解除した');
-          }
-          const found = hookToNotice(event, { waiting: watchdog.isWaiting(), pending: relay.pendingCount() });
-          if (!found) return;
-          logger.info(`hook を知らせる event=${event.hook_event_name} type=${event.notification_type ?? '-'}`);
-          await notice.post(found.text, noticeCard(found.text, found.screenButton && opts.console !== undefined, found.color));
-        },
-      })
-    : undefined;
-
-  // --- !status / !restart / !compact / !clear -------------------------------------
-  const status = (): string => {
-    const waiting = watchdog.waitingSince();
-    return buildStatusText({
-      startedAt,
-      workDir: opts.workDir ?? '',
-      discordConnected: bridge.isConnected,
-      waitingSince: waiting === undefined ? undefined : new Date(waiting),
-      pendingPermissions: relay.pendingCount(),
-      lastHooks: inbox?.lastEvents(5) ?? [],
-      sessionAllowSince: sessionAllow ? (sessionAllow.current?.since ?? null) : undefined,
-      extraLines: [keepalive ? keepaliveStatusLine(keepalive.status()) : undefined, usageWatch?.statusLine()].filter(
-        (line): line is string => line !== undefined
-      ),
-      now: new Date(),
-    });
-  };
+  const keepalive = createKeepalive(opts, { server, watchdog, relay, turn, usageWatch });
+  const presence = createPresence(opts, relay, turn);
+  const inbox = createHookInbox(opts, { turn, typing, usageWatch, keepalive, sessionAllow, notice, watchdog, relay });
+  const status = createStatus(opts, { startedAt, watchdog, relay, inbox, sessionAllow, keepalive, usageWatch });
   const session = opts.restartFlagFile
-    ? new SessionControl({ console: opts.console, restartFlagFile: opts.restartFlagFile, bridge, logger, killParent: opts.killParent, sessionId: () => sessionId })
+    ? new SessionControl({
+        console: opts.console,
+        restartFlagFile: opts.restartFlagFile,
+        bridge,
+        logger,
+        killParent: opts.killParent,
+        sessionId: () => turn.sessionId(),
+      })
     : undefined;
   const wiring: Wiring = {
     bridge,
@@ -781,7 +695,7 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
     files,
     keepalive,
     onDelivered: (at) => {
-      turnActive = true;
+      turn.begin();
       todo?.reset();
       keepalive?.resetCount();
       typing.start(at.channel, at.threadTs);
@@ -789,29 +703,8 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
     stopTyping: () => typing.stopAll(),
   };
 
-  let stopped: Promise<void> | undefined;
-  /** 起動に失敗したか（受け取った server は、そのときは閉じない） */
-  let startFailed = false;
-  const stop = (): Promise<void> =>
-    (stopped ??= (async () => {
-      opts.lock?.release();
-      inbox?.stop();
-      session?.stop();
-      files?.stop();
-      keepalive?.stop();
-      usageWatch?.stop();
-      presence?.stop();
-      typing.stopAll();
-      watchdog.stop();
-      try {
-        // Discord の書き換えと Claude への通知が届くよう、切断より前に行う（denyAll は投げない）
-        await relay.denyAll('ブリッジ終了');
-        await bridge.stop();
-      } finally {
-        if (!(startFailed && opts.server)) await server.close();
-      }
-    })());
-  opts.onCleanupReady?.(stop);
+  const stopper = createStopper(opts, { server, relay, inbox, session, files, keepalive, usageWatch, presence, typing, watchdog });
+  opts.onCleanupReady?.(stopper.stop);
 
   try {
     if (opts.server) await server.replaceDeps(deps);
@@ -825,25 +718,261 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
       onGatewayLost: (detail) => server.pushMessage(gatewayLostText(detail), { kind: 'bridge_error' }),
     });
   } catch (e) {
-    startFailed = true;
-    await stop().catch((err: unknown) => logger.error('起動失敗後の後片付けで例外', err));
+    stopper.markStartFailed();
+    await stopper.stop().catch((err: unknown) => logger.error('起動失敗後の後片付けで例外', err));
     throw e;
   }
   logger.info('Discord ブリッジ稼働中');
-  // 起動の途中で終了処理（stdin の終了など）が始まっていたら、それ以上は始めない（止めた後に投稿やタイマーを残さない）
-  if (stopped === undefined && ruleStore) await noticeRejectedRules(ruleStore, notice, logger);
-  if (stopped === undefined) await inbox?.start();
-  if (stopped === undefined && opts.crashFile) {
-    const crashed = takeCrashNotice(opts.crashFile);
-    if (crashed) {
-      logger.warn('想定外の終了から起動し直した');
-      await notice.post(crashed);
-    }
-  }
-  if (stopped === undefined) usageWatch?.start();
-  if (stopped === undefined) presence?.start();
 
-  return { stop };
+  // 起動の途中で終了処理（stdin の終了など）が始まっていたら、それ以上は始めない（止めた後に投稿やタイマーを残さない）。
+  // 各段の await の間にも終了処理は始まりうるので、段ごとに確かめる
+  const unlessStopped = async (step: () => Promise<void> | void): Promise<void> => {
+    if (!stopper.isStopping()) await step();
+  };
+  if (ruleStore) await unlessStopped(() => noticeRejectedRules(ruleStore, notice, logger));
+  await unlessStopped(() => inbox?.start());
+  const { crashFile } = opts;
+  if (crashFile) await unlessStopped(() => noticeCrash(crashFile, notice, logger));
+  await unlessStopped(() => usageWatch?.start());
+  await unlessStopped(() => presence?.start());
+
+  return { stop: stopper.stop };
+}
+
+/** Claude のターンの状態。hook の記録・中継・つなぎ止め・ボットのステータス表示が読み書きする */
+class TurnState {
+  private active = false;
+  private limited = false;
+  private session: string | undefined;
+
+  /** Claude がターンの途中（中継してから、または手元で入力してから Stop まで） */
+  isActive(): boolean {
+    return this.active;
+  }
+
+  /** 使用量の上限に当たっている（StopFailure の rate_limit から、次に応答が終わるまで） */
+  isLimited(): boolean {
+    return this.limited;
+  }
+
+  /** 今の会話の session_id（自分のセッションの hook の記録で最後に見たもの）。!restart で同じ会話を開き直すのに使う */
+  sessionId(): string | undefined {
+    return this.session;
+  }
+
+  /** Claude に中継した、または手元で入力された */
+  begin(): void {
+    this.active = true;
+  }
+
+  /** 応答が終わった（Stop）。使用量の上限も解けたとみなす */
+  ended(): void {
+    this.active = false;
+    this.limited = false;
+  }
+
+  /** 応答が失敗で終わった（StopFailure）。rate_limit なら上限に当たっている */
+  failed(rateLimited: boolean): void {
+    this.active = false;
+    if (rateLimited) this.limited = true;
+  }
+
+  rememberSession(sessionId: string): void {
+    this.session = sessionId;
+  }
+}
+
+/** キャッシュのつなぎ止め。hook の記録が無いと応答の終わりが分からないので、hookInboxFile も要る */
+function createKeepalive(
+  opts: BridgeAppOptions,
+  deps: { server: ChannelServer; watchdog: ResponseWatchdog; relay: PermissionRelay; turn: TurnState; usageWatch: UsageWatch | undefined }
+): Keepalive | undefined {
+  if (!opts.keepalive || !opts.hookInboxFile) return undefined;
+
+  const { server, watchdog, relay, turn, usageWatch } = deps;
+  return new Keepalive({
+    ...opts.keepalive,
+    send: () => server.pushMessage(KEEPALIVE_TEXT, { kind: 'keepalive' }),
+    isBusy: () => turn.isActive() || watchdog.isWaiting() || relay.pendingCount() > 0,
+    // 使用量がしきい値を越えている間も送らない（合図でも使用量を使うため）
+    isLimited: () => turn.isLimited() || (usageWatch?.isHigh() ?? false),
+    logger: opts.logger,
+  });
+}
+
+/** ボットのステータス表示（bridge が対応しているときだけ） */
+function createPresence({ bridge, logger }: BridgeAppOptions, relay: PermissionRelay, turn: TurnState): PresenceUpdater | undefined {
+  if (!bridge.setPresence) return undefined;
+
+  return new PresenceUpdater({
+    inputs: () => ({ limited: turn.isLimited(), pendingPermissions: relay.pendingCount(), working: turn.isActive() }),
+    apply: (state) => bridge.setPresence?.(state),
+    logger,
+  });
+}
+
+interface HookDeps {
+  turn: TurnState;
+  typing: TypingIndicator;
+  usageWatch: UsageWatch | undefined;
+  keepalive: Keepalive | undefined;
+  sessionAllow: SessionAllowAll | undefined;
+  notice: NoticePoster;
+  watchdog: ResponseWatchdog;
+  relay: PermissionRelay;
+}
+
+/** hook の記録を読み、ターンの状態を進めて、ターミナル側の出来事を Discord に知らせる */
+function createHookInbox(opts: BridgeAppOptions, deps: HookDeps): HookInbox | undefined {
+  if (!opts.hookInboxFile) return undefined;
+
+  const { logger } = opts;
+  const { turn, typing, usageWatch, keepalive, sessionAllow, notice, watchdog, relay } = deps;
+  return new HookInbox({
+    file: opts.hookInboxFile,
+    logger,
+    pollMs: opts.hookPollMs,
+    sessionTag: opts.sessionTag,
+    onEvent: async (event) => {
+      if (event.session_id) turn.rememberSession(event.session_id);
+      switch (event.hook_event_name) {
+        case 'UserPromptSubmit':
+          turn.begin();
+          break;
+        case 'Stop':
+          typing.stopAll();
+          turn.ended();
+          usageWatch?.limitCleared();
+          keepalive?.requestEnded(event.at);
+          break;
+        case 'StopFailure': {
+          typing.stopAll();
+          const rateLimited = event.error === 'rate_limit';
+          turn.failed(rateLimited);
+          if (rateLimited) usageWatch?.limitHit();
+          keepalive?.requestEnded(event.at);
+          break;
+        }
+        case 'SessionStart':
+          keepalive?.resetCount();
+          usageWatch?.contextReset();
+          break;
+        case 'PostCompact':
+          usageWatch?.contextReset();
+          break;
+        case 'SessionEnd':
+          typing.stopAll();
+          break;
+      }
+      // !clear などで新しい会話になったら、「全部許可」を解除する（会話ごとに許可し直す）
+      if (event.hook_event_name === 'SessionStart' && event.source === 'clear' && sessionAllow?.disable()) {
+        logger.info('全部許可を解除（新しい会話）');
+        await notice.post('🔒 新しい会話になったので「このセッション中は全部許可」を解除した');
+      }
+      const found = hookToNotice(event, { waiting: watchdog.isWaiting(), pending: relay.pendingCount() });
+      if (!found) return;
+      logger.info(`hook を知らせる event=${event.hook_event_name} type=${event.notification_type ?? '-'}`);
+      await notice.post(found.text, noticeCard(found.text, found.screenButton && opts.console !== undefined, found.color));
+    },
+  });
+}
+
+/** `!status` の文面を作る関数 */
+function createStatus(
+  { bridge, workDir }: BridgeAppOptions,
+  deps: {
+    startedAt: Date;
+    watchdog: ResponseWatchdog;
+    relay: PermissionRelay;
+    inbox: HookInbox | undefined;
+    sessionAllow: SessionAllowAll | undefined;
+    keepalive: Keepalive | undefined;
+    usageWatch: UsageWatch | undefined;
+  }
+): () => string {
+  const { startedAt, watchdog, relay, inbox, sessionAllow, keepalive, usageWatch } = deps;
+  return () => {
+    const waiting = watchdog.waitingSince();
+    return buildStatusText({
+      startedAt,
+      workDir: workDir ?? '',
+      discordConnected: bridge.isConnected,
+      waitingSince: waiting === undefined ? undefined : new Date(waiting),
+      pendingPermissions: relay.pendingCount(),
+      lastHooks: inbox?.lastEvents(5) ?? [],
+      sessionAllowSince: sessionAllow ? (sessionAllow.current?.since ?? null) : undefined,
+      extraLines: [keepalive ? keepaliveStatusLine(keepalive.status()) : undefined, usageWatch?.statusLine()].filter(
+        (line): line is string => line !== undefined
+      ),
+      now: new Date(),
+    });
+  };
+}
+
+interface Stopper {
+  /** 後片付け。2 回目以降の呼び出しは 1 回目と同じ Promise を返す */
+  stop: () => Promise<void>;
+  /** 後片付けが始まっている */
+  isStopping: () => boolean;
+  /** 起動に失敗した印。付けると、受け取った server（縮退モードから戻るとき）は閉じない */
+  markStartFailed: () => void;
+}
+
+/** 通常モードの後片付け（順序は RunningApp.stop の説明のとおり） */
+function createStopper(
+  { bridge, lock, server: givenServer }: BridgeAppOptions,
+  parts: {
+    server: ChannelServer;
+    relay: PermissionRelay;
+    inbox: HookInbox | undefined;
+    session: SessionControl | undefined;
+    files: FileSender | undefined;
+    keepalive: Keepalive | undefined;
+    usageWatch: UsageWatch | undefined;
+    presence: PresenceUpdater | undefined;
+    typing: TypingIndicator;
+    watchdog: ResponseWatchdog;
+  }
+): Stopper {
+  const { server, relay, inbox, session, files, keepalive, usageWatch, presence, typing, watchdog } = parts;
+  let stopped: Promise<void> | undefined;
+  let startFailed = false;
+
+  const stop = (): Promise<void> =>
+    (stopped ??= (async () => {
+      lock?.release();
+      inbox?.stop();
+      session?.stop();
+      files?.stop();
+      keepalive?.stop();
+      usageWatch?.stop();
+      presence?.stop();
+      typing.stopAll();
+      watchdog.stop();
+      try {
+        // Discord の書き換えと Claude への通知が届くよう、切断より前に行う（denyAll は投げない）
+        await relay.denyAll('ブリッジ終了');
+        await bridge.stop();
+      } finally {
+        if (!(startFailed && givenServer)) await server.close();
+      }
+    })());
+
+  return {
+    stop,
+    isStopping: () => stopped !== undefined,
+    markStartFailed: () => {
+      startFailed = true;
+    },
+  };
+}
+
+/** start.ps1 が想定外の終了から起動し直したときの印を読んで知らせ、消す */
+async function noticeCrash(crashFile: string, notice: NoticePoster, logger: Logger): Promise<void> {
+  const crashed = takeCrashNotice(crashFile);
+  if (!crashed) return;
+  logger.warn('想定外の終了から起動し直した');
+  await notice.post(crashed);
 }
 
 /**
