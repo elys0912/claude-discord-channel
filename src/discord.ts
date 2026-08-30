@@ -58,6 +58,12 @@ const THREADLESS_TARGET_CAPACITY = 500;
 /** 添付を取りに行ってよいホスト */
 const CDN_HOSTS = new Set(['cdn.discordapp.com', 'media.discordapp.net']);
 
+/** 実際に送るチャンネルと、返信の参照（DM・スレッドを作れなかったときの返信先のメッセージ） */
+type SendTarget = { channel: SendableChannels; replyTo?: string };
+
+/** スラッシュコマンドと右クリックメニューの interaction */
+type AppCommandInteraction = ChatInputCommandInteraction | MessageContextMenuCommandInteraction;
+
 /** どの送信でも、誰も呼ばない（@everyone・ロール・ユーザー・返信先への通知を止める） */
 const NO_MENTIONS = { parse: [], repliedUser: false } as const;
 
@@ -513,8 +519,7 @@ export class DiscordBridge {
    */
   private async answerSlash(interaction: ChatInputCommandInteraction): Promise<{ command: Command; ctx: ActionContext } | undefined> {
     try {
-      const channel = interaction.channel ?? (await this.client.channels.fetch(interaction.channelId).catch(() => null));
-      const { kind, conversationId } = interactionConversation(channel, interaction.channelId, interaction.guildId ?? null);
+      const { kind, conversationId } = await this.interactionPlace(interaction);
       const parsed = parseSlashCommand(
         {
           name: interaction.commandName,
@@ -527,14 +532,8 @@ export class DiscordBridge {
         this.access,
         this.allowedConversations
       );
-      if (!parsed.ok) {
-        this.logger.warn(`スラッシュコマンドを無視 reason=${parsed.reason} user=${interaction.user.id}`);
-        await interaction.reply({ content: '⚠️ ここでは、このボットのコマンドは使えない', flags: MessageFlags.Ephemeral });
-        return undefined;
-      }
-      await interaction.reply({ content: slashEcho(parsed.command), allowedMentions: NO_MENTIONS });
-      const echo = await interaction.fetchReply();
-      this.locations.set(echo.id, echo.channelId);
+      if (!parsed.ok) return await this.refuse(interaction, 'スラッシュコマンド', parsed.reason, '⚠️ ここでは、このボットのコマンドは使えない');
+      const echo = await this.replyEcho(interaction, slashEcho(parsed.command));
       return {
         command: parsed.command,
         ctx: {
@@ -560,18 +559,11 @@ export class DiscordBridge {
   ): Promise<{ result: GateResult; raw: InboundRef } | undefined> {
     try {
       if (interaction.commandName !== FORWARD_COMMAND_NAME) return undefined;
-      const channel = interaction.channel ?? (await this.client.channels.fetch(interaction.channelId).catch(() => null));
-      const { kind, conversationId } = interactionConversation(channel, interaction.channelId, interaction.guildId ?? null);
+      const { kind, conversationId } = await this.interactionPlace(interaction);
       const refused = checkUse({ guildId: interaction.guildId ?? null, userId: interaction.user.id, conversationId }, this.access, this.allowedConversations);
-      if (refused) {
-        this.logger.warn(`右クリックメニューを無視 reason=${refused} user=${interaction.user.id}`);
-        await interaction.reply({ content: '⚠️ ここでは、このボットのメニューは使えない', flags: MessageFlags.Ephemeral });
-        return undefined;
-      }
+      if (refused) return await this.refuse(interaction, '右クリックメニュー', refused, '⚠️ ここでは、このボットのメニューは使えない');
       const target = interaction.targetMessage;
-      await interaction.reply({ content: `📨 Claude に渡した: ${target.url}`, allowedMentions: NO_MENTIONS });
-      const echo = await interaction.fetchReply();
-      this.locations.set(echo.id, echo.channelId);
+      const echo = await this.replyEcho(interaction, `📨 Claude に渡した: ${target.url}`);
       this.locations.set(target.id, target.channelId);
       const replyTo = kind === 'thread' ? interaction.channelId : echo.id;
       this.logger.info(`メッセージを Claude に渡す message=${target.id} by=${interaction.user.id}`);
@@ -583,6 +575,27 @@ export class DiscordBridge {
       this.logger.warn('右クリックメニューへの応答に失敗', errMessage(e));
       return undefined;
     }
+  }
+
+  /** コマンドを使った場所の種類と会話 ID。channel がキャッシュに無ければ取りに行き、取れなければ guildId で決める */
+  private async interactionPlace(interaction: AppCommandInteraction): Promise<{ kind: ChannelKind; conversationId: string }> {
+    const channel = interaction.channel ?? (await this.client.channels.fetch(interaction.channelId).catch(() => null));
+    return interactionConversation(channel, interaction.channelId, interaction.guildId ?? null);
+  }
+
+  /** 使えない人・場所。本人にだけ見える返事をして undefined を返す */
+  private async refuse(interaction: AppCommandInteraction, what: string, reason: string, content: string): Promise<undefined> {
+    this.logger.warn(`${what}を無視 reason=${reason} user=${interaction.user.id}`);
+    await interaction.reply({ content, flags: MessageFlags.Ephemeral });
+    return undefined;
+  }
+
+  /** 使ったことを会話に一言返し、その返信を後で書き換えられるよう場所を覚える */
+  private async replyEcho(interaction: AppCommandInteraction, content: string): Promise<Message> {
+    await interaction.reply({ content, allowedMentions: NO_MENTIONS });
+    const echo = await interaction.fetchReply();
+    this.locations.set(echo.id, echo.channelId);
+    return echo;
   }
 
   /** そのスレッドにボットが関わっているか */
@@ -607,7 +620,7 @@ export class DiscordBridge {
    * - DM: そのチャンネルに送り、threadTs のメッセージへの返信にする
    * - サーバー: threadTs のスレッドがあればそこ、無ければ threadTs のメッセージからスレッドを作る。作れなければ元メッセージへの返信
    */
-  private async resolveTarget(conversation: string, threadTs: string | undefined): Promise<{ channel: SendableChannels; replyTo?: string }> {
+  private async resolveTarget(conversation: string, threadTs: string | undefined): Promise<SendTarget> {
     if (threadTs === undefined) return { channel: await this.sendable(conversation) };
     if (this.dmChannelIds().has(conversation)) return { channel: await this.sendable(conversation), replyTo: threadTs };
     if (this.threadlessTargets.has(threadTs)) return { channel: await this.sendable(conversation), replyTo: threadTs };
@@ -651,7 +664,7 @@ export class DiscordBridge {
     return new Set(this.dmChannels.values());
   }
 
-  private async send(target: { channel: SendableChannels; replyTo?: string }, options: MessageCreateOptions): Promise<Message> {
+  private async send(target: SendTarget, options: MessageCreateOptions): Promise<Message> {
     const sent = await target.channel.send({
       ...options,
       allowedMentions: NO_MENTIONS,
@@ -671,8 +684,7 @@ export class DiscordBridge {
   async postText(channel: string, text: string, threadTs?: string): Promise<{ ts: string[]; asFile?: boolean }> {
     this.assertAllowed(channel);
     const safe = neutralizeBroadcasts(text);
-    const ids: string[] = [];
-    if (safe.trim() === '') return { ts: ids };
+    if (safe.trim() === '') return { ts: [] };
     const target = await this.resolveTarget(channel, threadTs);
     // 長い返信は、冒頭だけを本文にして全文を添付する
     const long = toLongReply(safe, this.longReplyChars);
@@ -680,17 +692,7 @@ export class DiscordBridge {
       const sent = await this.send(target, { content: long.content, files: [{ attachment: long.file, name: long.name }] });
       return { ts: [sent.id], asFile: true };
     }
-    try {
-      for (const [i, piece] of nonBlankChunks(safe, TEXT_CHUNK_MAX).entries()) {
-        // DM で返信の参照を付けるのは最初の 1 通だけ
-        const sent = await this.send(i === 0 ? target : { channel: target.channel }, { content: piece });
-        ids.push(sent.id);
-      }
-    } catch (e) {
-      if (ids.length === 0) throw e;
-      throw new Error(`${errMessage(e)} (sent=${ids.length})`, { cause: e });
-    }
-    return { ts: ids };
+    return { ts: await this.sendChunks(target, nonBlankChunks(safe, TEXT_CHUNK_MAX), 0) };
   }
 
   async postCard(channel: string, card: Card, threadTs?: string): Promise<{ ts: string }> {
@@ -730,17 +732,28 @@ export class DiscordBridge {
       ...(first ? { content: first } : {}),
       files: files.map((f) => ({ attachment: f.path, name: f.name })),
     });
+    await this.sendChunks({ channel: target.channel }, rest, 1);
+    return { ts: sent.id };
+  }
 
-    let count = 1;
+  /**
+   * pieces を順に送り、送ったメッセージの ID を返す。返信の参照（DM で付けるもの）は最初の 1 通だけに付ける。
+   * 途中で失敗したら、例外のメッセージに `sent=N`（alreadySent を含む送れた件数）を付けて投げる。
+   * Claude が再送の範囲を決めるのに使う契約なので、文面の形はここ 1 か所で決める。1 通も送れていなければそのまま投げる
+   */
+  private async sendChunks(target: SendTarget, pieces: readonly string[], alreadySent: number): Promise<string[]> {
+    const ids: string[] = [];
     try {
-      for (const piece of rest) {
-        await this.send({ channel: target.channel }, { content: piece });
-        count++;
+      for (const [i, piece] of pieces.entries()) {
+        const sent = await this.send(i === 0 ? target : { channel: target.channel }, { content: piece });
+        ids.push(sent.id);
       }
     } catch (e) {
-      throw new Error(`${errMessage(e)} (sent=${count})`, { cause: e });
+      const sentCount = alreadySent + ids.length;
+      if (sentCount === 0) throw e;
+      throw new Error(`${errMessage(e)} (sent=${sentCount})`, { cause: e });
     }
-    return { ts: sent.id };
+    return ids;
   }
 
   /** 本文だけに書き換える（edit_message ツール用。カードとボタンは外す） */
