@@ -67,7 +67,7 @@ describe('PermissionRelay', () => {
     expect(replies.map(({ channel, threadTs }) => ({ channel, threadTs }))).toEqual([{ channel: 'C1', threadTs: '77' }]);
     expect(posts).toHaveLength(0);
     expect(relay.lookup('abcde')).toEqual(REQ);
-    expect(relay.pendingCount()).toBe(1);
+    expect(relay.unansweredCount()).toBe(1);
     expect(relay.lastThread).toEqual({ channel: 'C1', threadTs: '77' });
   });
 
@@ -90,7 +90,7 @@ describe('PermissionRelay', () => {
     await relay.answerByButton({ requestId: 'abcde', behavior: 'allow' }, 'U1', { channel: 'C1', ts: '20' });
 
     expect(updates).toEqual([expect.objectContaining({ channel: 'C1', ts: '20' })]);
-    expect(relay.pendingCount()).toBe(0);
+    expect(relay.unansweredCount()).toBe(0);
   });
 
   it('まだ話しかけられていなければ、DM 全体に配信する', async () => {
@@ -234,7 +234,7 @@ describe('PermissionRelay', () => {
       expect(replies).toHaveLength(1);
       expect(replies[0]?.card.title).toBe('🔓 自動許可: Write');
       expect(replies[0]?.card.buttons).toBeUndefined();
-      expect(relay.pendingCount()).toBe(0);
+      expect(relay.unansweredCount()).toBe(0);
     });
 
     it('自動許可の記録も不可視文字を見えるようにし、サロゲートペアの途中で切らない', async () => {

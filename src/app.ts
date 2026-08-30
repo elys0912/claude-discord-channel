@@ -795,7 +795,7 @@ function createKeepalive(
   return new Keepalive({
     ...opts.keepalive,
     send: () => server.pushMessage(KEEPALIVE_TEXT, { kind: 'keepalive' }),
-    isBusy: () => turn.isActive() || watchdog.isWaiting() || relay.pendingCount() > 0,
+    isBusy: () => turn.isActive() || watchdog.isWaiting() || relay.unansweredCount() > 0,
     // 使用量がしきい値を越えている間も送らない（合図でも使用量を使うため）
     isLimited: () => turn.isLimited() || (usageWatch?.isHigh() ?? false),
     logger: opts.logger,
@@ -807,7 +807,7 @@ function createPresence({ bridge, logger }: BridgeAppOptions, relay: PermissionR
   if (!bridge.setPresence) return undefined;
 
   return new PresenceUpdater({
-    inputs: () => ({ limited: turn.isLimited(), pendingPermissions: relay.pendingCount(), working: turn.isActive() }),
+    inputs: () => ({ limited: turn.isLimited(), pendingPermissions: relay.unansweredCount(), working: turn.isActive() }),
     apply: (state) => bridge.setPresence?.(state),
     logger,
   });
@@ -871,7 +871,7 @@ function createHookInbox(opts: BridgeAppOptions, deps: HookDeps): HookInbox | un
         logger.info('全部許可を解除（新しい会話）');
         await notice.post('🔒 新しい会話になったので「このセッション中は全部許可」を解除した');
       }
-      const found = hookToNotice(event, { waiting: watchdog.isWaiting(), pending: relay.pendingCount() });
+      const found = hookToNotice(event, { waiting: watchdog.isWaiting(), pending: relay.unansweredCount() });
       if (!found) return;
       logger.info(`hook を知らせる event=${event.hook_event_name} type=${event.notification_type ?? '-'}`);
       await notice.post(found.text, noticeCard(found.text, found.screenButton && opts.console !== undefined, found.color));
@@ -900,7 +900,7 @@ function createStatus(
       workDir: workDir ?? '',
       discordConnected: bridge.isConnected,
       waitingSince: waiting === undefined ? undefined : new Date(waiting),
-      pendingPermissions: relay.pendingCount(),
+      pendingPermissions: relay.unansweredCount(),
       lastHooks: inbox?.lastEvents(5) ?? [],
       sessionAllowSince: sessionAllow ? (sessionAllow.current?.since ?? null) : undefined,
       extraLines: [keepalive ? keepaliveStatusLine(keepalive.status()) : undefined, usageWatch?.statusLine()].filter(
