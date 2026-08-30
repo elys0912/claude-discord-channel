@@ -154,9 +154,10 @@ export function interactionConversation(
   channelId: string,
   guildId: string | null
 ): { kind: ChannelKind; conversationId: string } {
-  const kind = channel ? channelKind(channel) : guildId === null ? 'dm' : 'other';
+  if (!channel) return { kind: guildId === null ? 'dm' : 'other', conversationId: channelId };
+  const kind = channelKind(channel);
   if (kind !== 'thread') return { kind, conversationId: channelId };
-  const parentId = channel && 'parentId' in channel ? channel.parentId : null;
+  const parentId = 'parentId' in channel ? channel.parentId : null;
   return { kind, conversationId: parentId ?? '' };
 }
 
@@ -195,6 +196,9 @@ export function toInbound(message: Message, botUserId: string | undefined): Inbo
     botUserId === undefined ? [] : [...message.mentions.roles.filter((r) => r.tags?.botId === botUserId).keys()];
   const content = botUserId === undefined ? message.content : normalizeBotRoleMentions(message.content, botRoleIds, botUserId);
   const parentId = kind === 'thread' && 'parentId' in message.channel ? (message.channel.parentId ?? undefined) : undefined;
+  const mentionsBotRole = botRoleIds.length > 0;
+  const mentionsBotUser =
+    botUserId !== undefined && message.mentions.has(botUserId, { ignoreEveryone: true, ignoreRoles: true, ignoreRepliedUser: true });
   return {
     guildId: message.guildId ?? null,
     messageId: message.id,
@@ -207,10 +211,7 @@ export function toInbound(message: Message, botUserId: string | undefined): Inbo
     embedText: embedText(message),
     isUserMessage: message.type === MessageType.Default || message.type === MessageType.Reply,
     content,
-    mentionsBot:
-      botUserId !== undefined &&
-      (botRoleIds.length > 0 ||
-        message.mentions.has(botUserId, { ignoreEveryone: true, ignoreRoles: true, ignoreRepliedUser: true })),
+    mentionsBot: mentionsBotRole || mentionsBotUser,
     repliesToBot: botUserId !== undefined && message.mentions.repliedUser?.id === botUserId,
     createdAt: message.createdAt.toISOString(),
     files:
@@ -364,31 +365,34 @@ export class DiscordBridge {
     });
     this.client.on(Events.Error, (e) => this.logger.error('discord.js のエラー', e));
     this.client.on(Events.MessageCreate, (message) => this.enqueue(() => this.handleMessage(message)));
-    this.client.on(Events.InteractionCreate, (interaction) => {
-      if (interaction.isMessageContextMenuCommand()) {
-        // 右クリックメニューも 3 秒以内に応答が要るので、検証と一言の返信は先に済ませ、Claude に渡すのを列に積む
-        const answered = this.answerForward(interaction);
-        this.enqueue(async () => {
-          const forwarded = await answered;
-          if (forwarded && this.handlers) await this.handlers.onMessage(forwarded.result, forwarded.raw);
-        });
-        return;
-      }
-      if (interaction.isChatInputCommand()) {
-        // スラッシュコマンドも 3 秒以内に応答が要るので、検証と一言の返信は列を待たずに済ませ、コマンドの処理だけを列に積む
-        const answered = this.answerSlash(interaction);
-        this.enqueue(async () => {
-          const used = await answered;
-          if (used && this.handlers?.onCommand) await this.handlers.onCommand(used.command, used.ctx);
-        });
-        return;
-      }
-      // ボタンの応答は 3 秒以内に返す必要があるので、列を待たずにすぐ受け取ったことを返す
-      const acked = this.ack(interaction);
+    this.client.on(Events.InteractionCreate, (interaction) => this.onInteractionCreate(interaction));
+  }
+
+  /** 右クリックメニュー・スラッシュコマンド・ボタン。どれも 3 秒以内に応答が要るので、応答は列を待たずに返し、その後の処理を列に積む */
+  private onInteractionCreate(interaction: Interaction): void {
+    if (interaction.isMessageContextMenuCommand()) {
+      // 検証と一言の返信は先に済ませ、Claude に渡すのを列に積む
+      const answered = this.answerForward(interaction);
       this.enqueue(async () => {
-        await acked;
-        await this.handleInteraction(interaction);
+        const forwarded = await answered;
+        if (forwarded && this.handlers) await this.handlers.onMessage(forwarded.result, forwarded.raw);
       });
+      return;
+    }
+    if (interaction.isChatInputCommand()) {
+      // 検証と一言の返信は先に済ませ、コマンドの処理だけを列に積む
+      const answered = this.answerSlash(interaction);
+      this.enqueue(async () => {
+        const used = await answered;
+        if (used && this.handlers?.onCommand) await this.handlers.onCommand(used.command, used.ctx);
+      });
+      return;
+    }
+    // ボタンは、すぐ受け取ったことを返す
+    const acked = this.ack(interaction);
+    this.enqueue(async () => {
+      await acked;
+      await this.handleInteraction(interaction);
     });
   }
 
@@ -777,21 +781,15 @@ export class DiscordBridge {
   }
 
   /**
-   * 許可ユーザー全員の DM に送る。threadFor が返信先を返した DM ではそのメッセージへの返信に、
+   * 許可ユーザー全員の DM にカードを送る。threadFor が返信先を返した DM ではそのメッセージへの返信に、
    * 返さなかった DM ではそのまま投稿する。
    */
-  async postToAll(content: Card | string, threadFor?: (channel: string) => string | undefined): Promise<{ channel: string; ts: string }[]> {
+  async postToAll(card: Card, threadFor?: (channel: string) => string | undefined): Promise<{ channel: string; ts: string }[]> {
     const out: { channel: string; ts: string }[] = [];
     for (const channel of this.dmChannels.values()) {
-      const threadTs = threadFor?.(channel);
       try {
-        if (typeof content === 'string') {
-          const res = await this.postText(channel, content, threadTs);
-          out.push({ channel, ts: res.ts[0] ?? '' });
-        } else {
-          const res = await this.postCard(channel, content, threadTs);
-          out.push({ channel, ts: res.ts });
-        }
+        const res = await this.postCard(channel, card, threadFor?.(channel));
+        out.push({ channel, ts: res.ts });
       } catch (e) {
         this.logger.error(`DM への送信に失敗 channel=${channel}`, e);
       }
