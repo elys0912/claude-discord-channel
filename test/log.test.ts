@@ -111,3 +111,12 @@ describe('parseLogLevel', () => {
     expect(parseLogLevel(value)).toBe(expected);
   });
 });
+
+describe('redact（共通の鍵の形）', () => {
+  it('Discord のトークンに加えて、GitHub のトークン・AWS のアクセスキー ID・sk- の API キーも伏せる', () => {
+    const gh = `ghp_${'a'.repeat(36)}`;
+    const aws = `AKIA${'B'.repeat(16)}`;
+    const sk = `sk-${'c'.repeat(24)}`;
+    expect(redact(`${gh} ${aws} ${sk}`)).toBe('ghp_*** AKIA*** sk-***');
+  });
+});

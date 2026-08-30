@@ -3,6 +3,7 @@ import type { ParsedAccess } from './config.js';
 import type { Verdict } from './types.js';
 import { sanitizeMeta } from './format.js';
 import { PERMISSION_ID_BODY } from './permission.js';
+import { BoundedMap } from './bounded-map.js';
 
 /** 添付ファイルのうち、Claude に要約して渡す情報だけ */
 export interface FileInfo {
@@ -61,22 +62,16 @@ const DEFAULT_DEDUPE_CAPACITY = 500;
 
 /** 直近見た ID を憶えておき、二重配信を弾く（容量超過で古いものから破棄） */
 export class EventDedupe {
-  private readonly capacity: number;
-  private readonly store: Map<string, true>;
+  private readonly store: BoundedMap<true>;
 
   constructor(capacity: number = DEFAULT_DEDUPE_CAPACITY) {
-    this.capacity = capacity;
-    this.store = new Map();
+    this.store = new BoundedMap(capacity);
   }
 
   /** 初見なら記録して false、既に見たものなら true を返す */
   seen(eventId: string): boolean {
     if (this.store.has(eventId)) return true;
     this.store.set(eventId, true);
-    if (this.store.size > this.capacity) {
-      const oldest = this.store.keys().next();
-      if (!oldest.done) this.store.delete(oldest.value);
-    }
     return false;
   }
 }

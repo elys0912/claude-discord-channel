@@ -1,6 +1,8 @@
 // stderr / ファイルへ書き出すロガー。
+// このファイルは claude-slack-channel と claude-discord-channel で同じ内容にしている（直すときは両方を直す）。
 import fs from 'node:fs';
 import path from 'node:path';
+import { redactChannelSecrets } from './redact.js';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -17,18 +19,19 @@ export function parseLogLevel(value: string | undefined): LogLevel | undefined {
   return v !== undefined && Object.hasOwn(LEVEL_ORDER, v) ? (v as LogLevel) : undefined;
 }
 
-// Discord のボットのトークン（`<ユーザー ID の base64>.<時刻>.<署名>` の 3 つの部分）、Webhook の URL に含まれるトークン、
-// Authorization ヘッダーの値（Bot / Bearer）をログから伏せる。
-const DISCORD_TOKEN_RE = /[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{25,}/g;
-const WEBHOOK_URL_RE = /(discord(?:app)?\.com\/api\/webhooks\/\d+\/)[\w-]+/g;
-// 「Bot ready」のような普通の文を伏せないよう、トークンらしい長さ（16 文字以上）の値だけを対象にする
-const AUTH_HEADER_RE = /\b(Bot|Bearer)\s+[\w.~+/=-]{16,}/g;
+// 画面の中継（!screen）にも使うので、ターミナルに出やすいほかの鍵の形も伏せる。
+// GitHub のトークン（ghp_ / gho_ / ghu_ / ghs_ / ghr_ と github_pat_）、AWS のアクセスキー ID（AKIA / ASIA + 16 文字）、
+// sk- で始まる API キー（Anthropic・OpenAI など。普通の語を伏せないよう 20 文字以上に限る）
+const GITHUB_TOKEN_RE = /\b(gh[pousr]_|github_pat_)[A-Za-z0-9_]{20,}/g;
+const AWS_ACCESS_KEY_RE = /\b(AKIA|ASIA)[A-Z0-9]{16}\b/g;
+const SK_API_KEY_RE = /\bsk-[A-Za-z0-9_-]{20,}/g;
 
+/** ログと画面の中継に出す前に、トークンや鍵の形を伏せる（チャネル固有の形は redact.ts） */
 export function redact(s: string): string {
-  return s
-    .replace(WEBHOOK_URL_RE, '$1***')
-    .replace(DISCORD_TOKEN_RE, '***')
-    .replace(AUTH_HEADER_RE, (_m, kind: string) => `${kind} ***`);
+  return redactChannelSecrets(s)
+    .replace(GITHUB_TOKEN_RE, (_m, prefix: string) => `${prefix}***`)
+    .replace(AWS_ACCESS_KEY_RE, (_m, prefix: string) => `${prefix}***`)
+    .replace(SK_API_KEY_RE, 'sk-***');
 }
 
 // 循環参照があっても落ちない JSON.stringify
