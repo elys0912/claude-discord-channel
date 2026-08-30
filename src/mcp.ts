@@ -159,6 +159,25 @@ function defineTool<S extends z.ZodType>(
   };
 }
 
+/**
+ * deps に実体が無いことがあるツール（.env の設定で出さないもの）。実体が無ければ tools/list に出さない。
+ * 出していないツールは CallTool で見つからないので、実体が無いときの error の文は通常は返らない（型のために置いている）
+ */
+function defineOptionalTool<S extends z.ZodType>(
+  name: string,
+  description: string,
+  schema: S,
+  pick: (deps: McpDeps) => ((args: z.output<S>) => Promise<string>) | undefined
+): ToolDefinition {
+  return defineTool(
+    name,
+    description,
+    schema,
+    (deps, args) => pick(deps)?.(args) ?? Promise.resolve(`error: ${name} は使えない`),
+    (deps) => pick(deps) !== undefined
+  );
+}
+
 const TOOLS: ToolDefinition[] = [
   defineTool(
     'reply',
@@ -178,26 +197,23 @@ const TOOLS: ToolDefinition[] = [
     EditSchema,
     (deps, args) => deps.onEdit(args)
   ),
-  defineTool(
+  defineOptionalTool(
     'download_file',
     'Discord の添付ファイルをローカルの保存先フォルダーに保存する（extract: true なら圧縮ファイルを展開する）。保存先のパスを返す',
     DownloadSchema,
-    (deps, args) => (deps.onDownload ? deps.onDownload(args) : Promise.resolve('error: download_file は使えない')),
-    (deps) => deps.onDownload !== undefined
+    (deps) => deps.onDownload
   ),
-  defineTool(
+  defineOptionalTool(
     'send_file',
     '手元のファイルを Discord に添付して送る（1 ファイル 10MB まで）。秘密のファイルは送れない。送ってよい場所の外なら確認待ちになる',
     SendFileSchema,
-    (deps, args) => (deps.onSendFile ? deps.onSendFile(args) : Promise.resolve('error: send_file は使えない')),
-    (deps) => deps.onSendFile !== undefined
+    (deps) => deps.onSendFile
   ),
-  defineTool(
+  defineOptionalTool(
     'progress',
     'Discord に TODO の進み具合のカードを出す。同じ返信先で続けて呼ぶと、同じカードを書き換える。毎回、一覧の全体を渡す',
     ProgressSchema,
-    (deps, args) => (deps.onProgress ? deps.onProgress(args) : Promise.resolve('error: progress は使えない')),
-    (deps) => deps.onProgress !== undefined
+    (deps) => deps.onProgress
   ),
 ];
 
@@ -225,31 +241,15 @@ const PermissionRequestNotificationSchema = z.object({
 
 export interface McpDeps {
   logger: Logger;
-  onReply: (args: { chat_id: string; text: string; thread_id?: string | undefined }) => Promise<string>;
-  onReact: (args: { chat_id: string; message_id: string; emoji: string; thread_id?: string | undefined }) => Promise<string>;
-  onEdit: (args: { chat_id: string; message_id: string; text: string; thread_id?: string | undefined }) => Promise<string>;
+  onReply: (args: z.output<typeof ReplySchema>) => Promise<string>;
+  onReact: (args: z.output<typeof ReactSchema>) => Promise<string>;
+  onEdit: (args: z.output<typeof EditSchema>) => Promise<string>;
   /** 添付の保存。無ければ download_file ツールを出さない（.env に DOWNLOAD_DIR が無いボット） */
-  onDownload?:
-    | ((args: {
-        chat_id: string;
-        message_id: string;
-        attachment_id: string;
-        thread_id?: string | undefined;
-        extract?: boolean | undefined;
-      }) => Promise<string>)
-    | undefined;
+  onDownload?: ((args: z.output<typeof DownloadSchema>) => Promise<string>) | undefined;
   /** ファイルの送信。無ければ send_file ツールを出さない（.env に UPLOAD_DIRS が無いボット） */
-  onSendFile?:
-    | ((args: { chat_id: string; paths: string[]; text?: string | undefined; thread_id?: string | undefined }) => Promise<string>)
-    | undefined;
+  onSendFile?: ((args: z.output<typeof SendFileSchema>) => Promise<string>) | undefined;
   /** TODO の進み具合のカード。無ければ progress ツールを出さない（.env の TODO_PROGRESS=off） */
-  onProgress?:
-    | ((args: {
-        chat_id: string;
-        thread_id?: string | undefined;
-        items: { content: string; status: 'pending' | 'in_progress' | 'completed' }[];
-      }) => Promise<string>)
-    | undefined;
+  onProgress?: ((args: z.output<typeof ProgressSchema>) => Promise<string>) | undefined;
   onPermissionRequest: (req: PermissionRequest) => void | Promise<void>;
 }
 
