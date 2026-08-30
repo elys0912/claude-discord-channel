@@ -88,27 +88,44 @@ export function slashEcho(command: Command): string {
  * Discord が足す項目（id・version など）は比べない
  */
 export function sameCommands(registered: readonly unknown[], wanted: readonly AppCommandDefinition[] = APP_COMMANDS): boolean {
-  const shape = (c: unknown): string => {
-    const r = c as Partial<SlashDefinition>;
-    return JSON.stringify({
-      type: r.type ?? ApplicationCommandType.ChatInput,
-      name: r.name,
-      // 右クリックメニューの説明は、Discord が空文字で返す
-      description: r.description ?? '',
-      options: (r.options ?? []).map((o) => {
-        const opt = o as { type: number; name: string; description: string; required?: boolean; choices?: { name: string; value: unknown }[] };
-        return {
-          type: opt.type,
-          name: opt.name,
-          description: opt.description,
-          required: opt.required ?? false,
-          choices: (opt.choices ?? []).map((ch) => [ch.name, ch.value]),
-        };
-      }),
-      contexts: [...(r.contexts ?? [])].sort(),
-    });
-  };
-  const a = registered.map(shape).sort();
-  const b = wanted.map(shape).sort();
+  const a = registered.map(commandShape).sort();
+  const b = wanted.map(commandShape).sort();
   return a.length === b.length && a.every((s, i) => s === b[i]);
+}
+
+/** Discord から読んだ JSON の値をオブジェクトとして扱う（オブジェクトでなければ項目の無いものとみなす） */
+function asRecord(value: unknown): Record<string, unknown> {
+  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
+}
+
+function asArray(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : [];
+}
+
+/** 登録済みかを比べるための、コマンドを正規化した形 */
+function commandShape(command: unknown): string {
+  const c = asRecord(command);
+  return JSON.stringify({
+    type: c.type ?? ApplicationCommandType.ChatInput,
+    name: c.name,
+    // 右クリックメニューの説明は、Discord が空文字で返す
+    description: c.description ?? '',
+    options: asArray(c.options).map(optionShape),
+    contexts: [...asArray(c.contexts)].sort(),
+  });
+}
+
+/** 引数を正規化した形（省略された required と choices は既定の値にそろえる） */
+function optionShape(option: unknown): Record<string, unknown> {
+  const o = asRecord(option);
+  return {
+    type: o.type,
+    name: o.name,
+    description: o.description,
+    required: o.required ?? false,
+    choices: asArray(o.choices).map((choice) => {
+      const ch = asRecord(choice);
+      return [ch.name, ch.value];
+    }),
+  };
 }
