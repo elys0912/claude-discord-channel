@@ -18,6 +18,7 @@ import type { SessionAllowAll } from './session-allow.js';
 import type { Card } from './card.js';
 import { md } from './card.js';
 import type { DiscordBridge } from './discord.js';
+import { deriveRule } from './allow-rules.js';
 
 /** 自動許可をスレッドに記録するとき、入力を載せる長さ */
 const AUTO_ALLOW_PREVIEW_MAX = 300;
@@ -106,7 +107,10 @@ export class PermissionRelay {
     this.pending.add(req);
     this.startExpiryTimer(req.request_id);
 
-    const { card } = buildPermissionCard(req, undefined, this.sessionAllow !== undefined && this.sessionAllow.current === undefined);
+    // 自動許可から外す ask を読めないときは、全部許可のボタンを出さない
+    const sessionButton = this.sessionAllow !== undefined && this.sessionAllow.current === undefined && this.sessionAllow.available();
+    // 許可リストに足せるルールを作れないリクエストには「今後も許可」を出さない（その場の 1 回の許可だけにする）
+    const { card } = buildPermissionCard(req, undefined, sessionButton, deriveRule(req).ok);
     if (await this.replyToLastThread(req, card)) return;
 
     let results: MessageRef[] = [];

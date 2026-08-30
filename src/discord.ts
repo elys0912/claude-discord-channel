@@ -610,11 +610,16 @@ export class DiscordBridge {
     }
   }
 
-  /** メッセージのあるチャンネル。覚えていなければ、スレッドの中（threadTs があってメッセージと違う）か会話そのもの */
-  private locate(conversation: string, messageId: string, threadTs?: string): string {
+  /**
+   * メッセージのあるチャンネル。覚えていなければ、スレッドの中（threadTs があってメッセージと違う）か会話そのもの。
+   * threadTs は Claude が渡す任意の値なので、許可した会話（親）の中のスレッドだと確かめられたときだけ使う
+   */
+  private async locate(conversation: string, messageId: string, threadTs?: string): Promise<string> {
     const known = this.locations.get(messageId);
     if (known) return known;
-    if (threadTs !== undefined && threadTs !== messageId && !this.dmChannelIds().has(conversation)) return threadTs;
+    if (threadTs === undefined || threadTs === messageId || this.dmChannelIds().has(conversation)) return conversation;
+    const thread = await this.client.channels.fetch(threadTs).catch(() => null);
+    if (thread?.isThread() && thread.parentId === conversation) return threadTs;
     return conversation;
   }
 
@@ -703,13 +708,13 @@ export class DiscordBridge {
   /** 本文だけに書き換える（edit_message ツール用。カードとボタンは外す） */
   async updateText(channel: string, ts: string, text: string, threadTs?: string): Promise<void> {
     this.assertAllowed(channel);
-    await this.edit(this.locate(channel, ts, threadTs), ts, { content: neutralizeBroadcasts(text), embeds: [], components: [] });
+    await this.edit(await this.locate(channel, ts, threadTs), ts, { content: neutralizeBroadcasts(text), embeds: [], components: [] });
   }
 
   async updateCard(channel: string, ts: string, card: Card): Promise<void> {
     this.assertAllowed(channel);
     const { embeds, components } = toDiscord(card);
-    await this.edit(this.locate(channel, ts), ts, { content: '', embeds, components });
+    await this.edit(await this.locate(channel, ts), ts, { content: '', embeds, components });
   }
 
   private async edit(channelId: string, messageId: string, options: MessageEditOptions): Promise<void> {
@@ -721,7 +726,7 @@ export class DiscordBridge {
   async addReaction(channel: string, ts: string, emoji: string, threadTs?: string): Promise<void> {
     this.assertAllowed(channel);
     try {
-      const target = await this.sendable(this.locate(channel, ts, threadTs));
+      const target = await this.sendable(await this.locate(channel, ts, threadTs));
       await target.messages.react(ts, emoji);
     } catch (e) {
       this.logger.warn(`リアクションに失敗 emoji=${emoji}`, errMessage(e));
@@ -756,7 +761,7 @@ export class DiscordBridge {
   /** 添付の情報を引く（URL には期限があるので、毎回メッセージを読み直して新しいものをもらう） */
   async attachmentInfo(ref: AttachmentRef): Promise<RemoteFile> {
     this.assertAllowed(ref.chatId);
-    const channel = await this.sendable(this.locate(ref.chatId, ref.messageId, ref.threadId));
+    const channel = await this.sendable(await this.locate(ref.chatId, ref.messageId, ref.threadId));
     const message = await channel.messages.fetch({ message: ref.messageId, force: true });
     const attachment = message.attachments.get(ref.attachmentId);
     if (!attachment) throw new Error(`そのメッセージに添付が見つからない: ${ref.attachmentId}`);

@@ -18,10 +18,15 @@ function input(overrides: Partial<InteractionInput>): InteractionInput {
 
 describe('buildPermissionCard', () => {
   it('Allow / 今後も許可 / Deny を並べ、省略が無ければ See more は付けない', () => {
-    const { card, truncated } = buildPermissionCard(req);
+    const { card, truncated } = buildPermissionCard(req, undefined, false, true);
     expect(truncated).toBe(false);
     expect(card.buttons?.[0]?.map((b) => b.id)).toEqual(['perm:allow:abcde', 'perm:always:abcde', 'perm:deny:abcde']);
     expect(card.code).toBe('ls -la');
+  });
+
+  it('ルールを作れないリクエストには「今後も許可」を付けない（既定）', () => {
+    const { card } = buildPermissionCard(req);
+    expect(card.buttons?.[0]?.map((b) => b.id)).toEqual(['perm:allow:abcde', 'perm:deny:abcde']);
   });
 
   it('全部許可のボタンを付けられる。長いプレビューは省略して See more を付ける', () => {
