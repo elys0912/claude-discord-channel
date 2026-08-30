@@ -94,6 +94,11 @@ export function secretReason(file: string): string | undefined {
   return undefined;
 }
 
+/** 利用者に見せるファイル名の並び */
+function fileNames(files: readonly CheckedFile[]): string {
+  return files.map((f) => f.name).join(', ');
+}
+
 function formatSize(bytes: number): string {
   return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)}MB` : `${Math.ceil(bytes / 1024)}KB`;
 }
@@ -123,24 +128,37 @@ export class FileSender {
     }
     const viaLink = secretReason(real);
     if (viaLink) throw new Error(`送らない: ${viaLink}`);
-    for (const dir of this.opts.protectedDirs ?? []) {
-      const realDir = await fsp.realpath(dir).catch(() => dir);
-      if (isWithin(real, realDir)) throw new Error(`送らない: ブリッジの設定フォルダーの中（${file}）`);
-    }
+    await this.assertNotProtected(real, file);
     const stat = await fsp.stat(real);
     if (!stat.isFile()) throw new Error(`ファイルではない: ${file}`);
     if (stat.size > this.maxBytes) {
       throw new Error(`大きすぎる: ${file}（${formatSize(stat.size)}、上限 ${formatSize(this.maxBytes)}）`);
     }
-    let inside = false;
-    for (const dir of this.opts.uploadDirs) {
-      const realDir = await fsp.realpath(dir).catch(() => undefined);
-      if (realDir && isWithin(real, realDir)) inside = true;
-    }
-    return { real, name: path.basename(file), size: stat.size, inside };
+
+    return { real, name: path.basename(file), size: stat.size, inside: await this.isInsideUploadDirs(real) };
   }
 
-  /** send_file ツール。送った・確認待ちにした・送らなかった理由の文面を返す。投げない（呼び出し側の run がまとめる） */
+  /** たどった先が送らないフォルダー（protectedDirs）の中なら投げる。file はエラーの文面に出す、指定されたパス */
+  private async assertNotProtected(real: string, file: string): Promise<void> {
+    for (const dir of this.opts.protectedDirs ?? []) {
+      const realDir = await fsp.realpath(dir).catch(() => dir);
+      if (isWithin(real, realDir)) throw new Error(`送らない: ブリッジの設定フォルダーの中（${file}）`);
+    }
+  }
+
+  /** たどった先が UPLOAD_DIRS のどれかの中か */
+  private async isInsideUploadDirs(real: string): Promise<boolean> {
+    for (const dir of this.opts.uploadDirs) {
+      const realDir = await fsp.realpath(dir).catch(() => undefined);
+      if (realDir && isWithin(real, realDir)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * send_file ツール。送った・確認待ちにした・送らなかった理由の文面を返す。
+   * 投げるのは、送信か確認のカードの投稿に失敗したときだけ（呼び出し側の run がエラーの文面にする）
+   */
   async send(args: SendFileArgs): Promise<string> {
     if (args.paths.length === 0) return 'error: paths が空';
     if (args.paths.length > MAX_FILES_PER_MESSAGE) return `error: 1 回に送れるのは ${MAX_FILES_PER_MESSAGE} 個まで`;
@@ -197,7 +215,7 @@ export class FileSender {
       return;
     }
     clearTimeout(entry.timer);
-    const names = entry.files.map((f) => f.name).join(', ');
+    const names = fileNames(entry.files);
     if (!accept) {
       this.opts.logger.info(`send_file を取りやめ id=${id} by=${byUserId}`);
       await this.report(pressed, `🚫 送らなかった: ${names}`, 'muted');
@@ -219,8 +237,11 @@ export class FileSender {
     const entry = this.pending.get(id);
     if (!entry) return;
     this.pending.delete(id);
-    const names = entry.files.map((f) => f.name).join(', ');
-    if (entry.message) await this.report({ ...entry.message, threadTs: entry.args.thread_id ?? entry.message.ts }, `⌛ 答えが無かったので送らなかった: ${names}`, 'muted');
+    const names = fileNames(entry.files);
+    if (entry.message) {
+      const pressed = { ...entry.message, threadTs: entry.args.thread_id ?? entry.message.ts };
+      await this.report(pressed, `⌛ 答えが無かったので送らなかった: ${names}`, 'muted');
+    }
     await this.tell(entry.args, 'expired', `確認に答えが無かったので、ファイルは送らなかった（${names}）`);
   }
 
