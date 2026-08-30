@@ -161,9 +161,8 @@ export function parseInteraction(
   access: ParsedAccess,
   allowedConversations: ReadonlySet<string>
 ): ActionParse {
-  if (input.guildId !== null && input.guildId !== access.guildId) return { ok: false, reason: 'guild_mismatch' };
-  if (!access.allowFrom.includes(input.userId)) return { ok: false, reason: 'user_not_allowed' };
-  if (!allowedConversations.has(input.conversationId)) return { ok: false, reason: 'channel_not_allowed' };
+  const refused = checkAccess(input, access, allowedConversations);
+  if (refused) return refused;
 
   const m = CUSTOM_ID_RE.exec(input.customId);
   if (!m) return { ok: false, reason: 'invalid_custom_id' };
@@ -180,11 +179,11 @@ export function parseInteraction(
       if (!requestId) return { ok: false, reason: 'invalid_request_id' };
       return { ok: true, kind: 'verdict', verdict: { requestId, behavior: action === ACTION.ALLOW ? 'allow' : 'deny' } };
     case ACTION.SEE_MORE:
-      return requestId ? { ok: true, kind: 'see_more', requestId } : { ok: false, reason: 'invalid_request_id' };
+      return requestIdAction('see_more', requestId);
     case ACTION.ALLOW_ALWAYS:
-      return requestId ? { ok: true, kind: 'allow_always', requestId } : { ok: false, reason: 'invalid_request_id' };
+      return requestIdAction('allow_always', requestId);
     case ACTION.ALLOW_SESSION:
-      return requestId ? { ok: true, kind: 'allow_session', requestId } : { ok: false, reason: 'invalid_request_id' };
+      return requestIdAction('allow_session', requestId);
     case ACTION.SCREEN_SHOW:
       return { ok: true, kind: 'screen_show' };
     case ACTION.SCREEN_PICK:
@@ -204,4 +203,21 @@ export function parseInteraction(
     default:
       return { ok: false, reason: 'unknown_action' };
   }
+}
+
+/** 押した人・場所の検査（サーバー → 押した人 → 場所の順）。通れば undefined、外れたら最初に外れた理由 */
+function checkAccess(
+  input: InteractionInput,
+  access: ParsedAccess,
+  allowedConversations: ReadonlySet<string>
+): { ok: false; reason: string } | undefined {
+  if (input.guildId !== null && input.guildId !== access.guildId) return { ok: false, reason: 'guild_mismatch' };
+  if (!access.allowFrom.includes(input.userId)) return { ok: false, reason: 'user_not_allowed' };
+  if (!allowedConversations.has(input.conversationId)) return { ok: false, reason: 'channel_not_allowed' };
+  return undefined;
+}
+
+/** request_id だけを持つ操作の結果。ID の形が不正なら invalid_request_id */
+function requestIdAction(kind: 'see_more' | 'allow_always' | 'allow_session', requestId: string | undefined): ActionParse {
+  return requestId ? { ok: true, kind, requestId } : { ok: false, reason: 'invalid_request_id' };
 }
