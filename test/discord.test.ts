@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { ChannelType, Collection, Events, MessageFlags, MessageType } from 'discord.js';
 import type { Channel, Message } from 'discord.js';
-import { DiscordBridge, TEXT_CHUNK_MAX, embedText, interactionConversation, normalizeBotRoleMentions, threadName, toInbound } from '../src/discord.js';
+import { DiscordBridge, TEXT_CHUNK_MAX, embedText, interactionConversation, normalizeBotRoleMentions, toInbound } from '../src/discord.js';
+import { threadName } from '../src/discord-targets.js';
 import { Logger } from '../src/log.js';
 
 // 実在しない、形だけを合わせた ID（Discord の snowflake と同じ 19 桁）
@@ -686,7 +687,7 @@ describe('DiscordBridge のメッセージの在りか（thread_id の検証）'
 
   it('在りかを覚えているメッセージは、thread_id によらず覚えた場所で操作する（D-DC-05）', async () => {
     const { bridge, touched } = setup();
-    (bridge as unknown as { locations: { set: (k: string, v: string) => void } }).locations.set(MESSAGE, THREAD);
+    (bridge as unknown as { targets: { rememberLocation: (messageId: string, channelId: string) => void } }).targets.rememberLocation(MESSAGE, THREAD);
     await bridge.addReaction(ALLOWED, MESSAGE, '👍', FOREIGN_THREAD);
     expect(touched).toEqual([{ channel: THREAD, op: 'react' }]);
   });
