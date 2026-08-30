@@ -3,7 +3,7 @@
 import type { Card, CardColor } from './card.js';
 import type { DiscordBridge } from './discord.js';
 import type { Logger } from './log.js';
-import { textCard } from './notice.js';
+import { rewriteAsTextCard } from './notice.js';
 import { ACTION, customId } from './permission.js';
 import type { PermissionRequest } from './permission.js';
 import { denyOverlaps, parseRuleForCheck, proposeRule } from './allow-rules.js';
@@ -27,18 +27,51 @@ export interface RuleRelayOptions {
   newId?: () => string;
 }
 
+/** 期限付きで値を覚える Map（控えの ID → 値）。期限を過ぎたものは get で返さず、prune で消す */
+class ExpiringMap<V> {
+  private readonly ttlMs: number;
+  private readonly now: () => number;
+  private readonly entries = new Map<string, { value: V; expiresAt: number }>();
+
+  constructor(ttlMs: number, now: () => number) {
+    this.ttlMs = ttlMs;
+    this.now = now;
+  }
+
+  set(id: string, value: V): void {
+    this.entries.set(id, { value, expiresAt: this.now() + this.ttlMs });
+  }
+
+  /** 期限内なら値。無い・期限切れなら undefined（消すのは delete か prune） */
+  get(id: string): V | undefined {
+    const entry = this.entries.get(id);
+    return entry && this.now() <= entry.expiresAt ? entry.value : undefined;
+  }
+
+  delete(id: string): void {
+    this.entries.delete(id);
+  }
+
+  prune(): void {
+    const t = this.now();
+    for (const [id, entry] of this.entries) if (t > entry.expiresAt) this.entries.delete(id);
+  }
+}
+
 export class RuleRelay {
   private readonly opts: RuleRelayOptions;
-  private readonly now: () => number;
   private readonly newId: () => string;
-  private readonly proposals = new Map<string, { rule: string; expiresAt: number }>();
+  /** 追加の提案の控え（ID → ルール） */
+  private readonly proposals: ExpiringMap<string>;
   /** 一覧を出したときの控え（選択メニューの番号 → ルール） */
-  private readonly lists = new Map<string, { rules: string[]; expiresAt: number }>();
+  private readonly lists: ExpiringMap<string[]>;
 
   constructor(opts: RuleRelayOptions) {
     this.opts = opts;
-    this.now = opts.now ?? Date.now;
     this.newId = opts.newId ?? newToken;
+    const now = opts.now ?? Date.now;
+    this.proposals = new ExpiringMap(PROPOSAL_TTL_MS, now);
+    this.lists = new ExpiringMap(PROPOSAL_TTL_MS, now);
   }
 
   /** 実行許可のリクエストから候補を作り、追加してよいかをスレッドで確認する。作れない・deny に当たるならその旨を知らせる。投げない */
@@ -60,7 +93,7 @@ export class RuleRelay {
       }
       this.prune();
       const id = this.newId();
-      this.proposals.set(id, { rule: result.rule, expiresAt: this.now() + PROPOSAL_TTL_MS });
+      this.proposals.set(id, result.rule);
       const card: Card = {
         color: 'warn',
         title: '♾ 許可リストにこのルールを追加する？',
@@ -81,29 +114,29 @@ export class RuleRelay {
 
   /** 追加の提案に答えた。追加する前に deny を読み直して、もう一度照合する。投げない */
   async confirm(proposalId: string, accept: boolean, pressed: PressedMessage, byUserId: string): Promise<void> {
-    const proposal = this.proposals.get(proposalId);
+    const rule = this.proposals.get(proposalId);
     this.proposals.delete(proposalId);
-    if (!proposal || this.now() > proposal.expiresAt) {
+    if (rule === undefined) {
       await this.report(pressed, '⌛ この提案は期限切れ。もう一度「今後も許可」から提案し直すこと。', 'muted');
       return;
     }
     if (!accept) {
-      await this.report(pressed, `追加しなかった: ${proposal.rule}`, 'muted');
+      await this.report(pressed, `追加しなかった: ${rule}`, 'muted');
       return;
     }
     try {
-      const parsed = parseRuleForCheck(proposal.rule);
+      const parsed = parseRuleForCheck(rule);
       const hits = parsed ? denyOverlaps(parsed, this.opts.loadDeny()) : [];
       if (hits.length > 0) {
-        await this.report(pressed, `🚫 deny に当たるので追加しない: ${proposal.rule}\n当たった deny: ${hits.join(', ')}`, 'error');
+        await this.report(pressed, `🚫 deny に当たるので追加しない: ${rule}\n当たった deny: ${hits.join(', ')}`, 'error');
         return;
       }
-      this.opts.store.add(proposal.rule);
-      this.opts.logger.info(`許可リストに追加 rule=${proposal.rule} by=${byUserId}`);
-      await this.report(pressed, `✅ 許可リストに追加した: ${proposal.rule}（by ${byUserId}）\n次に起動し直したときから有効。取り消すときは !rules から消す。`, 'ok');
+      this.opts.store.add(rule);
+      this.opts.logger.info(`許可リストに追加 rule=${rule} by=${byUserId}`);
+      await this.report(pressed, `✅ 許可リストに追加した: ${rule}（by ${byUserId}）\n次に起動し直したときから有効。取り消すときは !rules から消す。`, 'ok');
     } catch (e) {
       this.opts.logger.warn('許可リストへの追加に失敗', e);
-      await this.report(pressed, `⚠️ 追加できなかった: ${proposal.rule}`, 'error');
+      await this.report(pressed, `⚠️ 追加できなかった: ${rule}`, 'error');
     }
   }
 
@@ -119,7 +152,7 @@ export class RuleRelay {
       this.prune();
       const shown = rules.slice(0, LIST_MAX);
       const id = this.newId();
-      this.lists.set(id, { rules: shown, expiresAt: this.now() + PROPOSAL_TTL_MS });
+      this.lists.set(id, shown);
       const more = rules.length > shown.length ? `\n（ほか ${rules.length - shown.length} 件。先に上のものを消すと出てくる）` : '';
       await bridge.postCard(
         channel,
@@ -143,8 +176,7 @@ export class RuleRelay {
 
   /** 一覧で選ばれたルールを消す。投げない */
   async remove(listId: string, index: number, pressed: PressedMessage, byUserId: string): Promise<void> {
-    const listed = this.lists.get(listId);
-    const rule = listed && this.now() <= listed.expiresAt ? listed.rules[index] : undefined;
+    const rule = this.lists.get(listId)?.[index];
     if (rule === undefined) {
       await this.report(pressed, '⌛ この一覧は期限切れ。もう一度 !rules から選び直すこと。', 'muted');
       return;
@@ -164,18 +196,22 @@ export class RuleRelay {
     }
   }
 
+  /** 押されたメッセージを結果に書き換える。押されたメッセージが分からなければスレッドに投稿する。投げない */
   private async report(pressed: PressedMessage, text: string, color: CardColor): Promise<void> {
+    const failureLog = '許可リストの結果の表示に失敗';
+    if (pressed.ts) {
+      await rewriteAsTextCard(this.opts, { channel: pressed.channel, ts: pressed.ts }, text, color, failureLog);
+      return;
+    }
     try {
-      if (pressed.ts) await this.opts.bridge.updateCard(pressed.channel, pressed.ts, textCard(text, color));
-      else await this.opts.bridge.postText(pressed.channel, text, pressed.threadTs);
+      await this.opts.bridge.postText(pressed.channel, text, pressed.threadTs);
     } catch (e) {
-      this.opts.logger.warn('許可リストの結果の表示に失敗', e);
+      this.opts.logger.warn(failureLog, e);
     }
   }
 
   private prune(): void {
-    const t = this.now();
-    for (const [id, p] of this.proposals) if (t > p.expiresAt) this.proposals.delete(id);
-    for (const [id, l] of this.lists) if (t > l.expiresAt) this.lists.delete(id);
+    this.proposals.prune();
+    this.lists.prune();
   }
 }
