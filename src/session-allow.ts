@@ -153,30 +153,28 @@ function mcpRuleMatches(rule: string, tool: string): boolean | undefined {
  */
 export function matchingRule(req: PermissionRequest, rules: readonly string[], ctx: DenyContext = defaultContext()): string | undefined {
   const tool = req.tool_name.trim().toLowerCase();
-  for (const rule of rules) {
-    const mcp = mcpRuleMatches(rule, tool);
-    if (mcp !== undefined) {
-      if (mcp) return rule;
-      continue;
-    }
-    const m = RULE_RE.exec(rule.trim());
-    if (!m) return rule;
-    const ruleTool = (m[1] ?? '').toLowerCase();
-    const pathTargets = PATH_RULE_TARGETS[ruleTool];
-    if (!(pathTargets ?? [ruleTool]).includes(tool)) continue;
-    const body = m[2]?.trim();
-    if (!body) return rule;
-    if (pathTargets) {
-      if (pathRuleMatches(body, req, ctx)) return rule;
-      continue;
-    }
-    if (!SHELL_TOOLS.has(tool)) return rule;
-    const command = inputField(req, 'command')?.trim();
-    if (command === undefined) return rule;
-    const prefix = body.replace(/:\*$|\s*\*$/, '').trim();
-    if (shellCommandMatches(command, prefix)) return rule;
-  }
-  return undefined;
+  return rules.find((rule) => ruleMatches(rule, req, tool, ctx));
+}
+
+/** 1 本のルールがリクエストに当たるか（tool はリクエストのツール名の小文字）。種別ごとの扱いは matchingRule の説明のとおり */
+function ruleMatches(rule: string, req: PermissionRequest, tool: string, ctx: DenyContext): boolean {
+  const mcp = mcpRuleMatches(rule, tool);
+  if (mcp !== undefined) return mcp;
+
+  const m = RULE_RE.exec(rule.trim());
+  if (!m) return true;
+  const ruleTool = (m[1] ?? '').toLowerCase();
+  const pathTargets = PATH_RULE_TARGETS[ruleTool];
+  if (!(pathTargets ?? [ruleTool]).includes(tool)) return false;
+  const body = m[2]?.trim();
+  if (!body) return true;
+  if (pathTargets) return pathRuleMatches(body, req, ctx);
+  if (!SHELL_TOOLS.has(tool)) return true;
+
+  const command = inputField(req, 'command')?.trim();
+  if (command === undefined) return true;
+  const prefix = body.replace(/:\*$|\s*\*$/, '').trim();
+  return shellCommandMatches(command, prefix);
 }
 
 export interface SessionAllowState {
