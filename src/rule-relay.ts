@@ -6,7 +6,8 @@ import type { Logger } from './log.js';
 import { textCard } from './notice.js';
 import { ACTION, customId } from './permission.js';
 import type { PermissionRequest } from './permission.js';
-import { AllowRuleStore, denyOverlaps, parseRuleForCheck, proposeRule } from './allow-rules.js';
+import { denyOverlaps, parseRuleForCheck, proposeRule } from './allow-rules.js';
+import type { AllowRuleStore } from './allow-rule-store.js';
 import { newToken } from './text.js';
 import type { PressedMessage } from './types.js';
 

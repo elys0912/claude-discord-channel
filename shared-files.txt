@@ -12,6 +12,7 @@ scripts/dialog-answer.ps1
 scripts/start.cmd
 
 src/allow-extra-check.ts
+src/allow-rule-store.ts
 src/allow-rules.ts
 src/bounded-map.ts
 src/chunk.ts
@@ -31,6 +32,7 @@ src/placeholder.ts
 src/screen.ts
 src/session-allow.ts
 src/session-control.ts
+src/settings-files.ts
 src/status.ts
 src/statusline.ts
 src/stdio-guard.ts
