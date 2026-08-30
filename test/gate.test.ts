@@ -41,7 +41,7 @@ function inThread(overrides: Partial<InboundMessage> = {}): InboundMessage {
 }
 
 const run = (msg: InboundMessage, opts: { known?: (id: string) => boolean; active?: (id: string) => boolean } = {}) =>
-  gate(msg, access, BOT, new EventDedupe(), opts.known, opts.active);
+  gate(msg, { access, selfBotUserId: BOT, dedupe: new EventDedupe(), isKnownRequest: opts.known, isActiveThread: opts.active });
 
 describe('gate', () => {
   it('許可した人の DM は中継し、chat_id は DM、thread_id はそのメッセージにする', () => {
@@ -108,8 +108,8 @@ describe('gate', () => {
 
   it('同じメッセージが二度届いたら二度目は捨てる', () => {
     const dedupe = new EventDedupe();
-    expect(gate(dm(), access, BOT, dedupe).kind).toBe('deliver');
-    expect(gate(dm(), access, BOT, dedupe)).toEqual({ kind: 'drop', reason: 'duplicate_event' });
+    expect(gate(dm(), { access, selfBotUserId: BOT, dedupe }).kind).toBe('deliver');
+    expect(gate(dm(), { access, selfBotUserId: BOT, dedupe })).toEqual({ kind: 'drop', reason: 'duplicate_event' });
   });
 
   it('保留中の ID への yes / no は回答にし、知らない ID ならふつうのメッセージにする', () => {
@@ -166,7 +166,7 @@ describe('forwardDelivery', () => {
 describe('CI の通知（ciWebhooks）', () => {
   const HOOK = '999999999999999990';
   const ciAccess: ParsedAccess = { ...access, ciWebhooks: [HOOK] };
-  const runCi = (msg: InboundMessage) => gate(msg, ciAccess, BOT, new EventDedupe());
+  const runCi = (msg: InboundMessage) => gate(msg, { access: ciAccess, selfBotUserId: BOT, dedupe: new EventDedupe() });
   const webhook = (overrides: Partial<InboundMessage> = {}) =>
     inChannel({ authorId: HOOK, authorIsBot: true, webhookId: HOOK, content: '', embedText: 'CI failed\nbranch: main', ...overrides });
 
@@ -184,7 +184,7 @@ describe('CI の通知（ciWebhooks）', () => {
   it('許可していないチャンネル・知らない webhook・DM のものは渡さない', () => {
     expect(runCi(webhook({ channelId: '333333333333333330' }))).toEqual({ kind: 'drop', reason: 'channel_not_allowed' });
     expect(runCi(webhook({ webhookId: '999999999999999991', authorId: '999999999999999991' }))).toEqual({ kind: 'drop', reason: 'bot_or_self' });
-    expect(gate(webhook(), access, BOT, new EventDedupe())).toEqual({ kind: 'drop', reason: 'bot_or_self' });
+    expect(gate(webhook(), { access, selfBotUserId: BOT, dedupe: new EventDedupe() })).toEqual({ kind: 'drop', reason: 'bot_or_self' });
   });
 
   it('`!clear` や `yes xxxxx` の本文でも、コマンドや回答にしない', () => {
@@ -194,7 +194,7 @@ describe('CI の通知（ciWebhooks）', () => {
 
   it('同じ投稿は 1 回だけ渡す', () => {
     const dedupe = new EventDedupe();
-    expect(gate(webhook(), ciAccess, BOT, dedupe).kind).toBe('deliver');
-    expect(gate(webhook(), ciAccess, BOT, dedupe)).toEqual({ kind: 'drop', reason: 'duplicate_event' });
+    expect(gate(webhook(), { access: ciAccess, selfBotUserId: BOT, dedupe }).kind).toBe('deliver');
+    expect(gate(webhook(), { access: ciAccess, selfBotUserId: BOT, dedupe })).toEqual({ kind: 'drop', reason: 'duplicate_event' });
   });
 });

@@ -413,7 +413,13 @@ export class DiscordBridge {
     // 自分の発言は捨てる（送った場所は send() で覚えている）
     if (message.author.id === this.botUserId) return;
     const msg = toInbound(message, this.botUserId);
-    const result = gate(msg, this.access, this.botUserId, this.dedupe, this.handlers.isKnownRequest, (t) => this.activeThreads.has(t));
+    const result = gate(msg, {
+      access: this.access,
+      selfBotUserId: this.botUserId,
+      dedupe: this.dedupe,
+      isKnownRequest: this.handlers.isKnownRequest,
+      isActiveThread: (t) => this.activeThreads.has(t),
+    });
     if (result.kind !== 'drop') this.rememberSender(msg);
     await this.handlers.onMessage(result, {
       channel: conversationOf(msg),

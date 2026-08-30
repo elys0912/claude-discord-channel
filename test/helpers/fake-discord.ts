@@ -272,7 +272,13 @@ export class FakeDiscord implements AppBridge {
   /** 本物の DiscordBridge.handleMessage と同じ手順で、gate を通して app.ts に渡す */
   async receive(msg: InboundMessage): Promise<void> {
     if (!this.handlers) return;
-    const result = gate(msg, this.access, BOT, this.dedupe, this.handlers.isKnownRequest, (t) => this.activeThreads.has(t));
+    const result = gate(msg, {
+      access: this.access,
+      selfBotUserId: BOT,
+      dedupe: this.dedupe,
+      isKnownRequest: this.handlers.isKnownRequest,
+      isActiveThread: (t) => this.activeThreads.has(t),
+    });
     if (result.kind !== 'drop' && msg.kind !== 'dm') this.activeThreads.add(threadOf(msg));
     await this.handlers.onMessage(result, { channel: conversationOf(msg), ts: msg.messageId, threadTs: threadOf(msg), user: msg.authorId });
   }
