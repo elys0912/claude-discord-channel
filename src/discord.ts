@@ -174,6 +174,23 @@ export function normalizeBotRoleMentions(content: string, botRoleIds: readonly s
   return out;
 }
 
+/** embed の文字の上限（CI の通知を Claude に渡すときに膨らませない） */
+const EMBED_TEXT_MAX = 4000;
+
+/** embed の見出し・URL・本文・項目・注記を文字にする（CI の通知は本文が空で embed だけのことが多い）。無ければ undefined */
+export function embedText(message: Pick<Message, 'embeds'>): string | undefined {
+  const lines: string[] = [];
+  for (const e of message.embeds) {
+    if (e.title) lines.push(e.title);
+    if (e.url) lines.push(e.url);
+    if (e.description) lines.push(e.description);
+    for (const f of e.fields) lines.push(`${f.name}: ${f.value}`);
+    if (e.footer?.text) lines.push(e.footer.text);
+  }
+  const text = lines.join('\n').trim();
+  return text === '' ? undefined : text.slice(0, EMBED_TEXT_MAX);
+}
+
 /** Discord の Message を gate 用の InboundMessage に詰め替える */
 export function toInbound(message: Message, botUserId: string | undefined): InboundMessage {
   const kind = channelKind(message.channel);
@@ -190,6 +207,8 @@ export function toInbound(message: Message, botUserId: string | undefined): Inbo
     parentId,
     authorId: message.author.id,
     authorIsBot: message.author.bot || message.webhookId !== null,
+    webhookId: message.webhookId ?? undefined,
+    embedText: embedText(message),
     isUserMessage: message.type === MessageType.Default || message.type === MessageType.Reply,
     content,
     mentionsBot:

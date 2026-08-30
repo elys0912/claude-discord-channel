@@ -19,7 +19,7 @@
 | ファイル | 場所 | 内容 |
 |---|---|---|
 | `.env` | 状態ディレクトリ | `DISCORD_BOT_TOKEN` と任意の設定（下記の「`.env` の設定」） |
-| `access.json` | 状態ディレクトリ | `guildId`、`allowFrom`（ユーザー ID の配列）、`channels`（チャンネル ID の配列、省略可）。ID はどれも数字の文字列。ほかのキーがあるとエラーにする |
+| `access.json` | 状態ディレクトリ | `guildId`、`allowFrom`（ユーザー ID の配列）、`channels`（チャンネル ID の配列、省略可）、`ciWebhooks`（CI の通知として渡す webhook の ID の配列、省略可）。ID はどれも数字の文字列。ほかのキーがあるとエラーにする |
 | `allow-extra.json` | 状態ディレクトリ | Discord の「今後も許可」で足したルール（`{"allow": [...]}`）。ブリッジが書き、起動スクリプトが allow に足す |
 | `restart.flag` | 状態ディレクトリ | 再起動フラグ（`{"at": ..., "sessionId": ...}`）。`start.ps1` はこれを消してから、`--resume <sessionId>`（会話の記録が無ければ新しい会話）で再起動する |
 | `hooks.jsonl` | 状態ディレクトリ | Claude Code の hook が追記する出来事の記録（1行に1つの JSON）。ブリッジが読んで Discord に通知する。1MB を超えると `hooks.jsonl.1` に退避する |
