@@ -37,13 +37,20 @@ export function isTextAttachment(f: FileInfo): boolean {
   return type.startsWith('text/') || type.startsWith('application/json') || TEXT_EXTENSION_RE.test(f.name ?? '');
 }
 
-/** 差し込む添付を選ぶ（前から順に、数・1 ファイル・合計の上限に収まるものだけ） */
-export function pickInline(files: readonly FileInfo[], limits: InlineLimits): FileInfo[] {
-  const out: FileInfo[] = [];
+/** ID のある添付（取りに行ける添付） */
+type IdentifiedFile = FileInfo & { id: string };
+
+function hasId(f: FileInfo): f is IdentifiedFile {
+  return f.id !== undefined && f.id !== '';
+}
+
+/** 差し込む添付を選ぶ（前から順に、ID があり、数・1 ファイル・合計の上限に収まるものだけ） */
+export function pickInline(files: readonly FileInfo[], limits: InlineLimits): IdentifiedFile[] {
+  const out: IdentifiedFile[] = [];
   let total = 0;
   for (const f of files) {
     if (out.length >= limits.maxFiles) break;
-    if (!f.id || !isTextAttachment(f)) continue;
+    if (!hasId(f) || !isTextAttachment(f)) continue;
     const size = f.size ?? Number.POSITIVE_INFINITY;
     if (size > limits.maxFileBytes || total + size > limits.maxTotalBytes) continue;
     out.push(f);
@@ -82,7 +89,7 @@ export async function inlineTextAttachments(
   const inlined: string[] = [];
   for (const f of pickInline(files, limits)) {
     try {
-      const info = await deps.bridge.attachmentInfo({ ...at, attachmentId: f.id ?? '' });
+      const info = await deps.bridge.attachmentInfo({ ...at, attachmentId: f.id });
       const res = await deps.bridge.fetchFile(info, AbortSignal.timeout(deps.fetchTimeoutMs ?? INLINE_FETCH_TIMEOUT_MS));
       const buf = await res.arrayBuffer();
       if (buf.byteLength > limits.maxFileBytes) throw new Error(`大きすぎる（${buf.byteLength} バイト）`);
@@ -92,7 +99,7 @@ export async function inlineTextAttachments(
       // meta の値に載せるので、区切りやタグの区切りになり得る文字は _ にする（gate.ts の添付の要約と同じ）
       inlined.push(info.name.replace(/[;,\r\n<>"'=]/g, '_'));
     } catch (e) {
-      deps.logger.warn(`テキストの添付を差し込めなかった attachment=${f.id ?? '-'}`, errMessage(e));
+      deps.logger.warn(`テキストの添付を差し込めなかった attachment=${f.id}`, errMessage(e));
     }
   }
   if (inlined.length === 0) return { content, inlined };
