@@ -52,7 +52,7 @@ npm run build
 1. **New Application** でアプリを作る。名前がボットの表示名になる。
 2. **Bot** の画面で次を設定する。
    - **Reset Token** でトークンを発行する。これが **`DISCORD_BOT_TOKEN`** になる。表示されるのはこの1回だけなので、すぐ `.env` に貼る。リセットには多要素認証が要る。
-   - **Privileged Gateway Intents** の **Message Content Intent** を ON にする。OFF だと、メッセージの本文が空で届く。
+   - **Privileged Gateway Intents** の **Message Content Intent** を ON にする。OFF だと、ブリッジの起動（と `npm run check`）が `Used disallowed intents` で失敗する。
    - **Public Bot** を OFF にする。ほかの人が自分のサーバーにこのボットを入れられないようにするため。OFF にできないときは、先に **Installation** で **Install Link** を **None** にする。
 3. **OAuth2** → **URL Generator** で、scope に `bot` を選び、次の権限を付けた URL を作る。その URL をブラウザで開き、使うサーバーにボットを招待する。
 
@@ -117,6 +117,7 @@ npm run check
 ビルド（`precheck`）のあと、Discord にログインして次を表示する。トークンそのものは出さない。
 
 - 状態ディレクトリの場所と、トークンの形が正しいか
+- Message Content Intent が ON か（OFF ならログインに失敗する）
 - ボットの名前と ID、参加しているサーバー
 - `guildId` のサーバーにボットが入っているか
 - `allowFrom` に書いた ID の表示名
@@ -143,10 +144,10 @@ Windows Terminal から実行する。
 | コマンド | 動作 |
 |---|---|
 | `scripts\start.cmd` | `projects.json` の一覧から番号で選んで起動する（Enter で先頭、`q` で中止） |
-| `scripts\start.cmd my-app` | `projects.json` の name で指定して起動する |
+| `scripts\start.cmd my-app` | `projects.json` の name で指定して起動する（name を先に照合する。同じ名前のフォルダーがカレントにあっても、`projects.json` のフォルダーで起動する） |
 | `scripts\start.cmd C:\path\to\app` | パスで直接指定して起動する |
 | `scripts\start.cmd my-app -PermissionMode auto` | 実行許可のモードを変える（[権限の設計](docs/security.md#権限の設計)） |
-| `scripts\start.cmd -DryRun` | 起動せずに、実行するコマンドラインだけを表示する。ビルドは省き、`.env` / `access.json` が無くても警告だけ出す |
+| `scripts\start.cmd -DryRun` | 起動せずに、実行するコマンドラインだけを表示する。ビルドは省き、`.env` / `access.json` が無くても警告だけ出す。`mcp.json` などは DryRun 用の別のフォルダーに書くので、動いているセッションには影響しない |
 | `scripts\start.cmd C:\path\to\app -StateDir <dir> -SettingsFile <file>` | 別のボットと設定で、もう1つのセッションを起動する（[セッションを並べる](docs/usage.md#セッションを並べる)） |
 
 - 起動すると experimental channels の警告ダイアログが出る。起動スクリプトが画面を見張って、**「1」（I am using this for local development）** を自動で選ぶ。90秒たってもダイアログが残っていたら、手で「1」を選ぶ。

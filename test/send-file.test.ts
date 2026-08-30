@@ -153,4 +153,14 @@ describe('FileSender', () => {
     expect(sent).toHaveLength(0);
     expect(told[0]?.meta.result).toBe('expired');
   });
+
+  it('確認のカードを出せなければ例外を返し、確認待ちを残さない（期限切れの知らせも出さない）', async () => {
+    const failingBridge = { ...bridge, postCard: () => Promise.reject(new Error('Missing Permissions')) };
+    const sender = make({ bridge: failingBridge, confirmTtlMs: 10 });
+    await expect(sender.send({ chat_id: 'c', paths: [path.join(outside, 'b.txt')] })).rejects.toThrow('Missing Permissions');
+    await new Promise((r) => setTimeout(r, 50));
+    await sender.confirm('abcd1234', true, { channel: 'c', ts: 'card1', threadTs: 'card1' }, 'u');
+    expect(sent).toHaveLength(0);
+    expect(told).toEqual([]);
+  });
 });

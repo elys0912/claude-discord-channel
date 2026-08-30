@@ -13,6 +13,7 @@ import { errMessage } from './errors.js';
 import { hasEmptyPrompt } from './screen.js';
 import type { ThreadRef } from './types.js';
 import type { DiscordBridge } from './discord.js';
+import { systemExe } from './system-exe.js';
 
 /** /exit を送ってから、まだ終了していないことを知らせるまでの時間 */
 export const EXIT_CONFIRM_MS = 20000;
@@ -232,7 +233,7 @@ export async function defaultKillParent(logger: Logger): Promise<void> {
   if (name === undefined || !KILLABLE_PARENTS.has(name.toLowerCase())) {
     throw new Error(`親プロセス（pid=${ppid} ${name ?? '名前不明'}）が Claude Code ではないので止めない`);
   }
-  await execFileAsync('taskkill.exe', ['/T', '/F', '/PID', String(ppid)], { timeout: KILL_TIMEOUT_MS, windowsHide: true });
+  await execFileAsync(systemExe('taskkill.exe'), ['/T', '/F', '/PID', String(ppid)], { timeout: KILL_TIMEOUT_MS, windowsHide: true });
 }
 
 /** tasklist の CSV（"claude.exe","1234",...）から、pid のイメージ名を読む。見つからなければ undefined */
@@ -246,7 +247,7 @@ export function parseTasklistName(csv: string, pid: number): string | undefined 
 
 async function processName(pid: number): Promise<string | undefined> {
   try {
-    const { stdout } = await execFileAsync('tasklist.exe', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], {
+    const { stdout } = await execFileAsync(systemExe('tasklist.exe'), ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], {
       timeout: KILL_TIMEOUT_MS,
       windowsHide: true,
     });

@@ -18,9 +18,13 @@ function fakeBridge(files: Record<string, { name: string; body: string | Uint8Ar
         if (!f) return Promise.reject(new Error('not found'));
         return Promise.resolve({ id: ref.attachmentId, name: f.name, url: `https://cdn.discordapp.com/${ref.attachmentId}` });
       },
-      fetchFile: (file: RemoteFile): Promise<Response> => {
+      fetchFile: (file: RemoteFile, signal?: AbortSignal): Promise<Response> => {
         const body = files[file.id]?.body;
         if (body instanceof Error) return Promise.reject(body);
+        // 応答の無い CDN の代わり。signal が切れるまで返さない
+        if (body === 'hang') {
+          return new Promise((_resolve, reject) => signal?.addEventListener('abort', () => reject(new Error('aborted'))));
+        }
         return Promise.resolve(new Response(body ?? ''));
       },
     },
@@ -65,6 +69,16 @@ describe('inlineTextAttachments', () => {
       { id: '2', name: 'b.txt', size: 10 },
     ];
     expect(await inlineTextAttachments({ bridge, logger }, at, '本文', true, files)).toEqual({ content: '本文', inlined: [] });
+  });
+
+  it('応答の無い取得は上限の時間で諦めて飛ばし、ほかの添付は差し込む', async () => {
+    const { bridge } = fakeBridge({ '1': { name: 'a.txt', body: 'hang' }, '2': { name: 'b.txt', body: 'b' } });
+    const files = [
+      { id: '1', name: 'a.txt', size: 10 },
+      { id: '2', name: 'b.txt', size: 1 },
+    ];
+    const r = await inlineTextAttachments({ bridge, logger, fetchTimeoutMs: 20 }, at, '本文', true, files);
+    expect(r.inlined).toEqual(['b.txt']);
   });
 
   it('名前の区切りになり得る文字は _ にする', async () => {

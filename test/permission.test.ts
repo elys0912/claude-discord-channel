@@ -47,6 +47,11 @@ describe('buildPermissionCard', () => {
     const { card } = buildPermissionCard({ ...req, input_preview: 'rm‮evil' });
     expect(card.code).toBe('rm\\u{202E}evil');
   });
+
+  it('点字の空白・行と段落の区切り・異体字セレクタ・タグ文字（補助面）も見えるようにする', () => {
+    const { card } = buildPermissionCard({ ...req, input_preview: 'a\u2800b\u2028c\u2029d\uFE0Fe\u{E0041}f\u{E0100}g\u{1D173}h\uFFF9i' });
+    expect(card.code).toBe('a\\u{2800}b\\u{2028}c\\u{2029}d\\u{FE0F}e\\u{E0041}f\\u{E0100}g\\u{1D173}h\\u{FFF9}i');
+  });
 });
 
 describe('buildResolvedCard', () => {

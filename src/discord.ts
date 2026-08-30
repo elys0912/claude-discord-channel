@@ -50,6 +50,8 @@ const THREAD_NAME_MAX = 40;
 /** 覚えておくメッセージの場所・ボットが関わったスレッドの数（古いものから忘れる） */
 const LOCATION_CAPACITY = 2000;
 const ACTIVE_THREAD_CAPACITY = 500;
+/** スレッドを作れなかった返信先の数（古いものから忘れる） */
+const THREADLESS_TARGET_CAPACITY = 500;
 /** 添付を取りに行ってよいホスト */
 const CDN_HOSTS = new Set(['cdn.discordapp.com', 'media.discordapp.net']);
 
@@ -88,6 +90,11 @@ export interface DiscordBridgeEvents {
   onCommand?: ((command: Command, ctx: ActionContext) => void | Promise<void>) | undefined;
   /** 保留中の permission request か（gate に渡す。省略時は `yes xxxxx` の形なら常に verdict） */
   isKnownRequest?: ((requestId: string) => boolean) | undefined;
+  /**
+   * Gateway が回復できない理由（トークンの無効化・Intent の不許可など）で閉じ、再接続しないとき。
+   * 以後は受信が止まるので、手元のセッションに知らせる。detail は閉じた理由（ログ用）
+   */
+  onGatewayLost?: ((detail: string) => void | Promise<void>) | undefined;
 }
 
 export interface DiscordInitResult {
@@ -224,10 +231,21 @@ export function toInbound(message: Message, botUserId: string | undefined): Inbo
   };
 }
 
-/** スレッドの名前（本文の先頭。空なら Claude） */
-function threadName(content: string): string {
+/**
+ * limit ごとに分けたチャンクのうち、空白だけでないもの。分けた結果、末尾が改行だけのチャンクになることがあり、
+ * そのまま送ると Discord に拒否されて、全部届いているのに失敗（sent=N）として返ってしまうため
+ */
+function nonBlankChunks(text: string, limit: number): string[] {
+  return chunkText(text, limit).filter((piece) => piece.trim() !== '');
+}
+
+/** スレッドの名前（本文の先頭。空なら Claude）。THREAD_NAME_MAX で切り、サロゲートペアの途中では切らない */
+export function threadName(content: string): string {
   const oneLine = content.replace(/<@!?\d+>/g, '').replace(/\s+/g, ' ').trim();
-  return oneLine === '' ? 'Claude' : oneLine.slice(0, THREAD_NAME_MAX);
+  if (oneLine === '') return 'Claude';
+
+  const head = oneLine.slice(0, THREAD_NAME_MAX);
+  return /[\uD800-\uDBFF]$/.test(head) ? head.slice(0, -1) : head;
 }
 
 export class DiscordBridge {
@@ -246,6 +264,11 @@ export class DiscordBridge {
   private readonly locations = new BoundedMap<string>(LOCATION_CAPACITY);
   /** ボットが関わったスレッド（話しかけられた・投稿した）。古いものから忘れる */
   private readonly activeThreads = new BoundedMap<true>(ACTIVE_THREAD_CAPACITY);
+  /**
+   * スレッドを作れなかった返信先のメッセージ（権限不足など）。「入力中…」の出し直しなどで同じ返信先に何度も送るので、
+   * 2 回目からは作ろうとせず、元のメッセージへの返信にする（失敗する API 呼び出しと警告を繰り返さない）。動いている間だけ覚える
+   */
+  private readonly threadlessTargets = new BoundedMap<true>(THREADLESS_TARGET_CAPACITY);
 
   private botUserId: string | undefined;
   private handlers: DiscordBridgeEvents | undefined;
@@ -345,10 +368,8 @@ export class DiscordBridge {
       this.connected = true;
       this.logger.info('gateway: resumed');
     });
-    this.client.on(Events.ShardDisconnect, () => {
-      this.connected = false;
-      this.logger.warn('gateway: disconnected');
-    });
+    // discord.js 14 の ShardDisconnect は、回復できない close code（4004 認証の失敗・4014 Intent の不許可など）で閉じて再接続しないときだけ来る
+    this.client.on(Events.ShardDisconnect, (event) => this.gatewayLost(`close code ${event.code}`));
     this.client.on(Events.ShardReconnecting, () => {
       this.connected = false;
       this.logger.info('gateway: reconnecting');
@@ -381,6 +402,15 @@ export class DiscordBridge {
         await this.handleInteraction(interaction);
       });
     });
+  }
+
+  /** 回復できない切断。受信の列を通さずに知らせる（列が詰まっていても届くように） */
+  private gatewayLost(detail: string): void {
+    this.connected = false;
+    this.logger.error(`gateway: 回復できない切断で、再接続しない（${detail}）`);
+    Promise.resolve(this.handlers?.onGatewayLost?.(detail)).catch((e: unknown) =>
+      this.logger.error('回復できない切断の知らせで例外', e)
+    );
   }
 
   /** 受信イベントを 1 本の Promise チェーンに積み、受け取った順に 1 件ずつ処理する */
@@ -588,6 +618,7 @@ export class DiscordBridge {
   private async resolveTarget(conversation: string, threadTs: string | undefined): Promise<{ channel: SendableChannels; replyTo?: string }> {
     if (threadTs === undefined) return { channel: await this.sendable(conversation) };
     if (this.dmChannelIds().has(conversation)) return { channel: await this.sendable(conversation), replyTo: threadTs };
+    if (this.threadlessTargets.has(threadTs)) return { channel: await this.sendable(conversation), replyTo: threadTs };
 
     // 既にあるスレッドならそこに送る。フォーラムの投稿もスレッドなので、親（フォーラム）に直接は送れなくても届く。
     // スレッドは許可した会話（親）の中にあるものだけ使う
@@ -606,6 +637,7 @@ export class DiscordBridge {
       return { channel: thread };
     } catch (e) {
       this.logger.warn(`スレッドを作れなかったので、元のメッセージへの返信にする thread=${threadTs}`, errMessage(e));
+      this.threadlessTargets.set(threadTs, true);
       return { channel: base, replyTo: threadTs };
     }
   }
@@ -640,7 +672,7 @@ export class DiscordBridge {
   // --- 送信 -----------------------------------------------------------------
 
   /**
-   * テキストを送る。許可した会話以外には送らない（投げる）。一斉メンションは無効化し、空なら何も送らない。
+   * テキストを送る。許可した会話以外には送らない（投げる）。一斉メンションは無効化し、空白だけなら何も送らない。
    * 長文は TEXT_CHUNK_MAX ごとに分けて順に送る。途中のチャンクで失敗した場合、1 通以上送れていれば
    * 例外のメッセージに `sent=N`（送れた件数）を付けて投げる（Claude が再送の範囲を判断できるように）。
    */
@@ -657,7 +689,7 @@ export class DiscordBridge {
       return { ts: [sent.id], asFile: true };
     }
     try {
-      for (const [i, piece] of chunkText(safe, TEXT_CHUNK_MAX).entries()) {
+      for (const [i, piece] of nonBlankChunks(safe, TEXT_CHUNK_MAX).entries()) {
         // DM で返信の参照を付けるのは最初の 1 通だけ
         const sent = await this.send(i === 0 ? target : { channel: target.channel }, { content: piece });
         ids.push(sent.id);
@@ -693,15 +725,29 @@ export class DiscordBridge {
     await target.channel.sendTyping();
   }
 
-  /** ファイルを添付して送る（send_file 用。送ってよいかの判定は send-file.ts が済ませている） */
+  /**
+   * ファイルを添付して送る（send_file 用。送ってよいかの判定は send-file.ts が済ませている）。
+   * text が TEXT_CHUNK_MAX を超えるときは、1 通目に先頭を、残りを続けて送る。
+   * 続きの送信で失敗したら、例外のメッセージに `sent=N`（添付の 1 通を含む送れた件数）を付けて投げる
+   */
   async sendFiles(channel: string, files: { path: string; name: string }[], text?: string, threadTs?: string): Promise<{ ts: string }> {
     this.assertAllowed(channel);
     const target = await this.resolveTarget(channel, threadTs);
-    const content = text === undefined ? undefined : chunkText(neutralizeBroadcasts(text), TEXT_CHUNK_MAX)[0];
+    const [first, ...rest] = text === undefined ? [] : nonBlankChunks(neutralizeBroadcasts(text), TEXT_CHUNK_MAX);
     const sent = await this.send(target, {
-      ...(content ? { content } : {}),
+      ...(first ? { content: first } : {}),
       files: files.map((f) => ({ attachment: f.path, name: f.name })),
     });
+
+    let count = 1;
+    try {
+      for (const piece of rest) {
+        await this.send({ channel: target.channel }, { content: piece });
+        count++;
+      }
+    } catch (e) {
+      throw new Error(`${errMessage(e)} (sent=${count})`, { cause: e });
+    }
     return { ts: sent.id };
   }
 
@@ -722,12 +768,21 @@ export class DiscordBridge {
     await channel.messages.edit(messageId, { ...options, allowedMentions: NO_MENTIONS });
   }
 
-  /** リアクション付与。失敗しても投げない（ログに残す） */
+  /**
+   * リアクション付与（MCP の react ツール用）。失敗（絵文字名の誤り・メッセージが無い・権限不足など）は投げる。
+   * もう付いているリアクションは Discord が成功で返すので、特別扱いは要らない
+   */
+  async addReactionOrThrow(channel: string, ts: string, emoji: string, threadTs?: string): Promise<void> {
+    this.assertAllowed(channel);
+    const target = await this.sendable(await this.locate(channel, ts, threadTs));
+    await target.messages.react(ts, emoji);
+  }
+
+  /** リアクション付与（受信時の 👀 や回答の印）。失敗しても投げない（ログに残す） */
   async addReaction(channel: string, ts: string, emoji: string, threadTs?: string): Promise<void> {
     this.assertAllowed(channel);
     try {
-      const target = await this.sendable(await this.locate(channel, ts, threadTs));
-      await target.messages.react(ts, emoji);
+      await this.addReactionOrThrow(channel, ts, emoji, threadTs);
     } catch (e) {
       this.logger.warn(`リアクションに失敗 emoji=${emoji}`, errMessage(e));
     }

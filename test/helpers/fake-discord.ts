@@ -197,6 +197,10 @@ export class FakeDiscord implements AppBridge {
     this.calls.push({ method: 'addReaction', channel, ts, emoji });
   }
 
+  async addReactionOrThrow(channel: string, ts: string, emoji: string): Promise<void> {
+    await this.addReaction(channel, ts, emoji);
+  }
+
   async postToAll(content: Card | string, threadFor?: (channel: string) => string | undefined): Promise<{ channel: string; ts: string }[]> {
     const out: { channel: string; ts: string }[] = [];
     for (const channel of this.dmChannels.values()) {

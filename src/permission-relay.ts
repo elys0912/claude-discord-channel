@@ -12,6 +12,8 @@ import {
   buildPermissionCard,
   buildResolvedCard,
   buildVerdictFailedCard,
+  revealInvisible,
+  truncatePlain,
 } from './permission.js';
 import type { PermissionRequest } from './permission.js';
 import type { SessionAllowAll } from './session-allow.js';
@@ -152,9 +154,11 @@ export class PermissionRelay {
     this.logger.info(`自動許可（全部許可中） id=${req.request_id} tool=${req.tool_name}`);
     const target = this.lastThreadRef;
     if (target) {
-      const preview = req.input_preview.length > AUTO_ALLOW_PREVIEW_MAX ? `${req.input_preview.slice(0, AUTO_ALLOW_PREVIEW_MAX)}…` : req.input_preview;
+      // 全部許可の間は、この記録が何を実行させたかの手がかりになる。実行許可のカードと同じく、不可視文字を見えるようにして切る
+      const preview = truncatePlain(req.input_preview, AUTO_ALLOW_PREVIEW_MAX).text;
+      const title = `🔓 自動許可: ${md(revealInvisible(req.tool_name))}`;
       try {
-        await this.bridge.postCard(target.channel, { color: 'ok', title: `🔓 自動許可: ${md(req.tool_name)}`, code: preview }, target.threadTs);
+        await this.bridge.postCard(target.channel, { color: 'ok', title, code: preview }, target.threadTs);
       } catch (e) {
         this.logger.warn('自動許可の記録の投稿に失敗', e);
       }

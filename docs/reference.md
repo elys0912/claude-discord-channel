@@ -29,8 +29,8 @@
 | `projects.json` | `config\`（git の管理外） | `projects`: `{ name, path }` の配列。起動時の選択肢になる |
 | `extra-mcp.json` | `config\`（git の管理外） | Discord のセッションで一緒に使う MCP サーバー。`.mcp.json` と同じ `mcpServers` の形で書く（ひな形: `extra-mcp.example.json`）。登録したサーバーのツールは確認なしで実行される |
 | `channel-settings.json` | `config\` | Discord のセッション専用の Claude Code の設定 |
-| `mcp.json` | `%TEMP%\claude-discord-channel\<状態ディレクトリ名>\` | 起動スクリプトが毎回作る MCP の設定 |
-| `channel-settings.merged.json` | `%TEMP%\claude-discord-channel\<状態ディレクトリ名>\` | `channel-settings.json` に、追加の allow と hook を足した設定。起動スクリプトが毎回作る |
+| `mcp.json` | `%TEMP%\claude-discord-channel\<状態ディレクトリ名>-<ハッシュ>\` | 起動スクリプトが毎回作る MCP の設定 |
+| `channel-settings.merged.json` | `%TEMP%\claude-discord-channel\<状態ディレクトリ名>-<ハッシュ>\` | `channel-settings.json` に、追加の allow と hook を足した設定。起動スクリプトが毎回作る |
 
 ## `.env` の設定
 
@@ -70,7 +70,7 @@
 - 出力先は `logs\bridge.log` と stderr。
 - レベルは info で固定（変える設定は無い）。
 - 5MB を超えると `bridge.log.1` に退避する。残すのは1世代だけで、古い `.1` は上書きする。
-- Gateway の接続の変化は `gateway: ready` / `resumed` / `reconnecting` / `disconnected` として出る。
+- Gateway の接続の変化は `gateway: ready` / `resumed` / `reconnecting` として出る。回復できない理由（トークンの無効化・Intent の不許可など）で閉じたときは `gateway: 回復できない切断で、再接続しない` を error で出し、手元のセッションにも `kind="bridge_error"` で知らせる（Claude がターミナルに書く）。
 
 ## 固定値
 
@@ -85,9 +85,9 @@
 | 覚えておくスレッド / メッセージの場所 | 500件 / 2000件（古いものから忘れる。動いている間だけ） |
 | 「入力中…」 | 8秒ごとに出し直し、15分で打ち切る |
 | ボットのステータスの更新 | 5秒ごとに状態を見て、変えるのは15秒に1回まで |
-| テキストの添付の差し込み | 1ファイル100KB、1メッセージ3ファイル・合計200KBまで |
+| テキストの添付の差し込み | 1ファイル100KB、1メッセージ3ファイル・合計200KBまで。1ファイルの取得は10秒で諦める（その添付は `download_file` で取れる） |
 | 添付のダウンロード / 展開 | 1GB・30分まで / 合計4GB・10万ファイルまで |
-| ロックのハートビート / 失効 | 10秒ごとに更新する。30秒間更新が無いか、ハートビートが現在時刻より5秒を超えて未来なら失効とみなす。持ち主のプロセスが死んでいれば、失効前でも取る |
+| ロックのハートビート / 失効 | 10秒ごとに更新する。30秒間更新が無いか、ハートビートが現在時刻より5秒を超えて未来なら失効とみなす。持ち主のプロセスが死んでいれば、失効前でも取る。更新の前に読み直し、別のブリッジに取られていたら（スリープ明けなど）書き戻さずに後片付けして終わる |
 | ロックが取れないときの取り直し | 起動時に最大10秒（0.5秒間隔）。取れなければ縮退モードに入る |
 | Discord にログインして準備ができるまでの待ち時間 | 30秒（過ぎたら起動を諦める） |
 | `hooks.jsonl` を読む間隔 / 起動時に読み直す範囲 | 1.5秒 / 起動の30秒前以降（そのうち、最後のセッションが始まった後の分だけ） |
@@ -125,9 +125,8 @@ Gateway の再接続は discord.js に任せている。
 | ターミナルに `server:discordbridge · no MCP server configured with that name` と出て、Discord から話しかけてもセッションに届かない | 作業フォルダーの local スコープに `discordbridge` が登録されていない。起動スクリプトが起動前に登録するので、起動時の警告を確かめる。登録できていなければ、警告に出たコマンドを作業フォルダーで実行してから再起動する（[権限の設計](security.md#権限の設計)） |
 | DM を送っても 👀 が付かない | `allowFrom` に自分の ID があるか、DM の相手がこのボットかを確かめる。ログの `受信を破棄 reason=...` は debug レベルなので出ない |
 | チャンネルで話しかけても 👀 が付かない | 次を順に確かめる。(1) ボットにメンションしたか。ボットが関わっているスレッドならメンションは要らないが、再起動した後はもう一度メンションする。(2) `access.json` の `channels` に、そのチャンネルの ID があるか（スレッドの ID ではなく親チャンネルの ID）。(3) `npm run check` で、そのチャンネルの権限が足りているか |
-| 本文が空で Claude に届く | Message Content Intent が OFF になっている。Developer Portal で ON にしてから再起動する |
 | 👀 は付いたのに返事が来ない | 5分たつと、無応答の警告が出る。**🖥 画面を確認**（または `!screen`）で、ターミナルが選択画面で止まっていないかを見る |
-| チャンネルでスレッドが作られず、元の発言への返信になる | ボットに Create Public Threads の権限が無い。ログに `スレッドを作れなかった` が出る。`npm run check` で権限を確かめる |
+| チャンネルでスレッドが作られず、元の発言への返信になる | ボットに Create Public Threads の権限が無い。ログに `スレッドを作れなかった` が出る。`npm run check` で権限を確かめる。一度作れなかった発言には、ブリッジを起動し直すまで作り直さない（権限を足したら、新しい発言で話しかける） |
 | MCP のツールに「つながっていない」と言われる | Discord のセッションは、`extra-mcp.json` に書いたサーバーしか読み込まない（[普段の MCP サーバーは読み込まれない](usage.md#普段の-mcp-サーバーは-discord-のセッションでは読み込まれない)） |
 | `download_file` / `send_file` が無いと言われる | `.env` に `DOWNLOAD_DIR` / `UPLOAD_DIRS` を書き、起動し直す。起動時のログの `download=on` / `upload=N件` で確かめられる |
 
@@ -144,7 +143,7 @@ Gateway の再接続は discord.js に任せている。
 | 症状 | 対処 |
 |---|---|
 | `!restart` したのに戻ってこない | `!status` で状態を見る。`/exit` が効かなければ `!restart force` を使う。警告ダイアログで止まっているなら、`dialog-answer.ps1` が探す文字列（`start.ps1` の `$DevChannelDialogPattern` / `$DevChannelChoicePattern`）が画面の文言と合っていない可能性がある。手元で画面を見て直す |
-| 使用量の上限や入力待ちの通知が Discord に来ない | 状態ディレクトリの `hooks.jsonl` が増えているかを見る。増えていなければ hook が動いていない。`%TEMP%\claude-discord-channel\<状態ディレクトリ名>\channel-settings.merged.json` に `hooks` があるか、`node` に PATH が通っているかを確かめる |
+| 使用量の上限や入力待ちの通知が Discord に来ない | 状態ディレクトリの `hooks.jsonl` が増えているかを見る。増えていなければ hook が動いていない。`%TEMP%\claude-discord-channel\<状態ディレクトリ名>-<ハッシュ>\channel-settings.merged.json` に `hooks` があるか、`node` に PATH が通っているかを確かめる |
 | `!screen` / `!restart` / `!compact` / `!stop` / 警告ダイアログへの自動応答がどれも動かない | PowerShell が Constrained Language Mode だと、`console.ps1` の `Add-Type` が失敗する。`powershell -NoProfile -Command '$ExecutionContext.SessionState.LanguageMode'` の結果が `FullLanguage` かを確かめる。それ以外なら、その PC ではこれらの機能を使えない |
 
 ここで解決しないときは、`logs\bridge.log` の該当する行（トークンは伏せてある）を添えて、GitHub の Issues に書いてほしい。
