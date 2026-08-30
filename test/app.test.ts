@@ -8,17 +8,16 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Logger } from '../src/log.js';
 import {
-  HELP_TEXT,
   KEEPALIVE_TEXT,
   REACTION,
   createDegradedDeps,
   createToolHandlers,
   fencePreview,
   normalizeEmoji,
-  parseCommand,
   startBridgeApp,
   startDegradedApp,
 } from '../src/app.js';
+import { HELP_TEXT, parseCommand } from '../src/commands.js';
 import { ChannelServer } from '../src/mcp.js';
 import { PermissionRelay } from '../src/permission-relay.js';
 import { ACCESS, BOT, CH, DM1, DM2, FakeDiscord, STRANGER, USER1, cardText, componentIds, flush } from './helpers/fake-discord.js';

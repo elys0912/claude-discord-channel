@@ -1,8 +1,9 @@
 // スラッシュコマンド（/status など）。`!` で始まるブリッジのコマンドを、Discord の入力欄の補完から選べるようにする。
 // 定義（Discord に登録する JSON）と、押されたコマンドの検証・解釈を持つ純関数群（I/O なし。登録と受信は discord.ts）。
-import { ApplicationCommandOptionType, ApplicationCommandType, ApplicationIntegrationType, InteractionContextType } from 'discord.js';
+import { ApplicationCommandType, ApplicationIntegrationType, InteractionContextType } from 'discord.js';
 import type { RESTPostAPIChatInputApplicationCommandsJSONBody, RESTPostAPIContextMenuApplicationCommandsJSONBody } from 'discord.js';
-import type { Command } from './app.js';
+import { COMMAND_SLASH_SPECS, commandFromSlash } from './commands.js';
+import type { Command, SlashArgs } from './commands.js';
 import type { ParsedAccess } from './config.js';
 
 type SlashDefinition = RESTPostAPIChatInputApplicationCommandsJSONBody;
@@ -21,43 +22,11 @@ function simple(name: string, description: string): SlashDefinition {
   };
 }
 
-/** Discord に登録するコマンド。名前は `!` のコマンドと同じにする */
-export const SLASH_COMMANDS: readonly SlashDefinition[] = [
-  simple('help', 'ブリッジのコマンドの一覧'),
-  simple('status', 'ブリッジの稼働状態（接続・返事待ち・実行許可・直近の hook）'),
-  simple('screen', 'ターミナルの画面を見る（選択画面ならメニューで選べる）'),
-  simple('stop', 'Esc を送って、Claude の今の作業を中断する'),
-  {
-    ...simple('keepalive', 'キャッシュのつなぎ止めの状態を見る・切り替える'),
-    options: [
-      {
-        type: ApplicationCommandOptionType.String,
-        name: 'mode',
-        description: '切り替えるとき（省略すると状態を見るだけ）',
-        required: false,
-        choices: [
-          { name: 'on', value: 'on' },
-          { name: 'off', value: 'off' },
-        ],
-      },
-    ],
-  },
-  simple('rules', '「今後も許可」で足したルールの一覧と削除'),
-  simple('compact', '/compact を送り、会話を要約して縮める'),
-  simple('clear', '/clear を送り、会話を捨てて新しい会話にする（元に戻せない）'),
-  {
-    ...simple('restart', '/exit を送り、同じ会話のまま Claude Code を起動し直す'),
-    options: [
-      {
-        type: ApplicationCommandOptionType.Boolean,
-        name: 'force',
-        description: 'true なら Claude Code を強制終了してから起動し直す（応答しないとき用）',
-        required: false,
-      },
-    ],
-  },
-  simple('lock', '「このセッション中は全部許可」を解除する'),
-];
+/** Discord に登録するコマンド。名前は `!` のコマンドと同じ（定義は commands.ts） */
+export const SLASH_COMMANDS: readonly SlashDefinition[] = COMMAND_SLASH_SPECS.map((c) => ({
+  ...simple(c.name, c.description),
+  ...(c.options ? { options: c.options } : {}),
+}));
 
 /** メッセージの右クリックメニュー（アプリ）の名前 */
 export const FORWARD_COMMAND_NAME = 'Claude に渡す';
@@ -85,12 +54,8 @@ export function checkUse(
   return undefined;
 }
 
-export interface SlashInput {
+export interface SlashInput extends SlashArgs {
   name: string;
-  /** keepalive の mode */
-  mode?: string | null | undefined;
-  /** restart の force */
-  force?: boolean | null | undefined;
   /** サーバーの中なら ID、DM なら null */
   guildId: string | null;
   userId: string;
@@ -108,25 +73,9 @@ export function parseSlashCommand(input: SlashInput, access: ParsedAccess, allow
   const refused = checkUse(input, access, allowedConversations);
   if (refused) return { ok: false, reason: refused };
 
-  switch (input.name) {
-    case 'help':
-    case 'status':
-    case 'screen':
-    case 'stop':
-    case 'rules':
-    case 'compact':
-    case 'clear':
-    case 'lock':
-      return { ok: true, command: input.name };
-    case 'keepalive':
-      if (input.mode === 'on') return { ok: true, command: 'keepalive on' };
-      if (input.mode === 'off') return { ok: true, command: 'keepalive off' };
-      return { ok: true, command: 'keepalive' };
-    case 'restart':
-      return { ok: true, command: input.force === true ? 'restart force' : 'restart' };
-    default:
-      return { ok: false, reason: 'unknown_command' };
-  }
+  const command = commandFromSlash(input.name, input);
+  if (command === undefined) return { ok: false, reason: 'unknown_command' };
+  return { ok: true, command };
 }
 
 /** 使ったことを会話に残す一言（スラッシュコマンドは、ふつうのメッセージのようには残らないため） */

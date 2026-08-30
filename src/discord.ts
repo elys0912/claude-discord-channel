@@ -39,7 +39,7 @@ import { parseInteraction } from './permission.js';
 import { PRESENCE_VIEW } from './presence.js';
 import type { PresenceState } from './presence.js';
 import type { ActionParse } from './permission.js';
-import type { Command } from './app.js';
+import type { Command } from './commands.js';
 import { APP_COMMANDS, FORWARD_COMMAND_NAME, checkUse, parseSlashCommand, sameCommands, slashEcho } from './slash.js';
 import { BoundedMap } from './bounded-map.js';
 

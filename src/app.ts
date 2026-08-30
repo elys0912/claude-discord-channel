@@ -37,6 +37,8 @@ import { PresenceUpdater } from './presence.js';
 import { TodoBoard } from './todo.js';
 import { inlineTextAttachments } from './inline-text.js';
 import type { InlineDeps } from './inline-text.js';
+import { HELP_TEXT, parseCommand } from './commands.js';
+import type { Command } from './commands.js';
 
 /** Discord のメッセージと添付の ID で指す添付の取得 */
 export type DiscordDownloadDeps = DownloadDeps<AttachmentRef>;
@@ -100,30 +102,6 @@ export interface Wiring {
   stopTyping?: (() => void) | undefined;
 }
 
-/** Claude に渡さず、ブリッジ自身が処理するコマンド（`!restart force` だけ引数を取る） */
-const COMMAND_RE = /^\s*!(help|screen|rules|status|restart(?:\s+force)?|compact|clear|lock|stop|keepalive(?:\s+(?:on|off))?)\s*$/i;
-/** COMMAND_RE が受け付けるコマンド（小文字・空白 1 つに正規化した形） */
-const COMMANDS = [
-  'help',
-  'screen',
-  'rules',
-  'status',
-  'restart',
-  'restart force',
-  'compact',
-  'clear',
-  'lock',
-  'stop',
-  'keepalive',
-  'keepalive on',
-  'keepalive off',
-] as const;
-export type Command = (typeof COMMANDS)[number];
-
-function isCommand(name: string): name is Command {
-  return (COMMANDS as readonly string[]).includes(name);
-}
-
 /** switch の網羅チェック。種類を足して case を書き忘れると、ここで型エラーになる */
 export function assertNever(value: never): never {
   throw new Error(`想定外の値: ${JSON.stringify(value)}`);
@@ -139,29 +117,6 @@ export function gatewayLostText(detail: string): string {
     'Discord からのメッセージは届かず、Discord のツールも使えない。',
     'ボットのトークンが無効になった、または Developer Portal で Intent が OFF になった可能性がある。設定を確かめてから起動し直す。',
   ].join('\n');
-}
-
-/** `!help` の文面 */
-export const HELP_TEXT = [
-  '📖 ブリッジのコマンド（Claude には渡さず、ブリッジが処理する。Claude が止まっていても使える。`!` の代わりに `/` で始めると、補完から選べる）',
-  '• `!help` … この一覧',
-  '• `!status` … ブリッジの稼働状態',
-  '• `!screen` … ターミナルの画面を見る（選択画面なら選択メニューで選べる）',
-  '• `!stop` … Esc を送って、Claude の今の作業を中断する',
-  '• `!keepalive on` / `!keepalive off` … キャッシュのつなぎ止めを切り替える（`!keepalive` だけなら状態を見る）',
-  '• `!rules` … Discord から足した許可ルールの一覧と削除',
-  '• `!compact` … /compact を送る（会話を要約して縮める）',
-  '• `!clear` … /clear を送る（会話を捨てて新しい会話にする）',
-  '• `!lock` … 「このセッション中は全部許可」を解除する（使えるボットだけ）',
-  '• `!restart` … /exit を送って起動し直す（会話は引き継ぐ）',
-  '• `!restart force` … Claude Code を強制終了して起動し直す（応答しないとき用）',
-].join('\n');
-
-/** 本文がブリッジのコマンドならその名前（小文字・空白 1 つに正規化）を返す */
-export function parseCommand(content: string): Command | undefined {
-  const m = COMMAND_RE.exec(content);
-  const name = m?.[1]?.toLowerCase().replace(/\s+/g, ' ');
-  return name !== undefined && isCommand(name) ? name : undefined;
 }
 
 /** Claude が Slack 風の名前（`:eyes:` など）で渡してきたときに、Unicode の絵文字に直す分だけ */
