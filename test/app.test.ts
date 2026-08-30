@@ -12,11 +12,11 @@ import {
   REACTION,
   createDegradedDeps,
   createToolHandlers,
-  fencePreview,
   normalizeEmoji,
   startBridgeApp,
   startDegradedApp,
 } from '../src/app.js';
+import { fence } from '../src/card.js';
 import { HELP_TEXT, parseCommand } from '../src/commands.js';
 import { ChannelServer } from '../src/mcp.js';
 import { PermissionRelay } from '../src/permission-relay.js';
@@ -311,9 +311,9 @@ describe('Discord → MCP', () => {
     expect(h.discord.of('postText')[0]?.text).toBe('```\nrm -rf \\u{202E}/ \\u{200B}ok\n```');
   });
 
-  it('fencePreview は中身の ``` を無効化してからコードブロックで包む', () => {
+  it('See more で使う fence は中身の ``` を無効化してからコードブロックで包む', () => {
     const zwsp = String.fromCharCode(0x200b);
-    expect(fencePreview('a\n```js\nb ```')).toBe(`\`\`\`\na\n\`${zwsp}\`${zwsp}\`js\nb \`${zwsp}\`${zwsp}\`\n\`\`\``);
+    expect(fence('a\n```js\nb ```')).toBe(`\`\`\`\na\n\`${zwsp}\`${zwsp}\`js\nb \`${zwsp}\`${zwsp}\`\n\`\`\``);
   });
 
   it('期限切れの See more は定型文を送る', async () => {

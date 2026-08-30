@@ -235,12 +235,14 @@ export function createDegradedDeps(logger: Logger): McpDeps {
 /** DM か許可チャンネルで届いたメッセージ。保留中の ID への `yes xxxxx` / `no xxxxx` なら許可の回答、それ以外は Claude へ中継する */
 export async function handleMessage(wiring: Wiring, result: GateResult, raw: InboundRef): Promise<void> {
   const { bridge, server, relay, logger, watchdog } = wiring;
+  const thread = raw.channel && raw.threadTs ? { channel: raw.channel, threadTs: raw.threadTs } : undefined;
+  const message = raw.channel && raw.ts ? { channel: raw.channel, ts: raw.ts } : undefined;
 
   // `!screen` などのコマンドは Claude に渡さずにここで処理する（Claude が止まっていても使えるように）
   const command = result.kind === 'deliver' ? parseCommand(result.content) : undefined;
-  if (command && raw.channel && raw.threadTs) {
-    if (raw.ts) await bridge.addReaction(raw.channel, raw.ts, REACTION.SEEN);
-    await handleCommand(wiring, command, { channel: raw.channel, threadTs: raw.threadTs }, raw.user ?? '');
+  if (command && thread) {
+    if (message) await bridge.addReaction(message.channel, message.ts, REACTION.SEEN);
+    await handleCommand(wiring, command, thread, raw.user ?? '');
     return;
   }
 
@@ -252,27 +254,21 @@ export async function handleMessage(wiring: Wiring, result: GateResult, raw: Inb
     case 'verdict':
       // gate 通過後に期限が切れた場合は Claude に送っていないので、リアクションも付けない
       if (!(await relay.answerByText(result.verdict, raw.user ?? ''))) return;
-      if (raw.channel && raw.ts) {
+      if (message) {
         const reaction = result.verdict.behavior === 'allow' ? REACTION.ALLOW : REACTION.DENY;
-        await bridge.addReaction(raw.channel, raw.ts, reaction);
+        await bridge.addReaction(message.channel, message.ts, reaction);
       }
       return;
 
     case 'deliver': {
-      if (raw.channel && raw.threadTs) relay.rememberThread(raw.channel, raw.threadTs);
-      let { content, meta } = result;
-      if (wiring.inline && result.files && raw.channel && raw.ts) {
-        const at = { chatId: raw.channel, messageId: raw.ts, threadId: raw.threadTs };
-        const r = await inlineTextAttachments(wiring.inline, at, content, result.hasText ?? true, result.files);
-        if (r.inlined.length > 0) {
-          content = r.content;
-          meta = { ...meta, inlined: r.inlined.join(',') };
-        }
-      }
+      if (thread) relay.rememberThread(thread.channel, thread.threadTs);
+      const { content, meta } = message ? await withInlinedText(wiring, result, message, raw.threadTs) : result;
       await server.pushMessage(content, meta);
-      if (raw.channel && raw.threadTs) wiring.onDelivered?.({ channel: raw.channel, threadTs: raw.threadTs });
-      if (raw.channel && raw.threadTs) watchdog.delivered({ channel: raw.channel, threadTs: raw.threadTs });
-      if (raw.channel && raw.ts) await bridge.addReaction(raw.channel, raw.ts, REACTION.SEEN);
+      if (thread) {
+        wiring.onDelivered?.(thread);
+        watchdog.delivered(thread);
+      }
+      if (message) await bridge.addReaction(message.channel, message.ts, REACTION.SEEN);
       return;
     }
 
@@ -281,14 +277,33 @@ export async function handleMessage(wiring: Wiring, result: GateResult, raw: Inb
   }
 }
 
+/** テキストの添付の中身を本文に差し込み、差し込んだ添付の名前を meta の inlined に載せる。差し込まなければ元のまま */
+async function withInlinedText(
+  { inline }: Wiring,
+  result: Extract<GateResult, { kind: 'deliver' }>,
+  message: { channel: string; ts: string },
+  threadTs: string | undefined
+): Promise<{ content: string; meta: Record<string, string> }> {
+  const { content, meta } = result;
+  if (!inline || !result.files) return { content, meta };
+
+  const at = { chatId: message.channel, messageId: message.ts, threadId: threadTs };
+  const inlined = await inlineTextAttachments(inline, at, content, result.hasText ?? true, result.files);
+  if (inlined.inlined.length === 0) return { content, meta };
+
+  return { content: inlined.content, meta: { ...meta, inlined: inlined.inlined.join(',') } };
+}
+
 /** ブリッジ自身のコマンド。使えない環境ではその旨をスレッドに返す */
-async function handleCommand(
-  { bridge, screen, rules, status, session, sessionAllow, logger, watchdog, keepalive, stopTyping }: Wiring,
-  command: Command,
-  at: ThreadRef,
-  byUserId: string
-): Promise<void> {
-  const unavailable = (name: string): Promise<unknown> => bridge.postText(at.channel, `⚠️ このブリッジでは ${name} を使えない`, at.threadTs);
+async function handleCommand(wiring: Wiring, command: Command, at: ThreadRef, byUserId: string): Promise<void> {
+  const { bridge, screen, rules, status, session, sessionAllow, keepalive } = wiring;
+
+  /** feature が無いブリッジでは、name を使えない旨を返す */
+  const withFeature = async <T>(feature: T | undefined, name: string, run: (available: T) => Promise<unknown>): Promise<void> => {
+    if (feature) await run(feature);
+    else await bridge.postText(at.channel, `⚠️ このブリッジでは ${name} を使えない`, at.threadTs);
+  };
+
   switch (command) {
     case 'help':
       await bridge.postText(at.channel, HELP_TEXT, at.threadTs);
@@ -297,71 +312,76 @@ async function handleCommand(
       await screen.show(at.channel, at.threadTs);
       return;
     case 'stop':
-      if (!session) {
-        await unavailable('!stop');
-        return;
-      }
-      if (await session.interrupt(at, byUserId)) {
-        // 中断したので、返事が無いという警告と入力中の表示はもう出さない
-        watchdog.activity();
-        stopTyping?.();
-        const text = '⏹ Esc を送って中断した。次の指示を待っている。ターミナルで確認が開いていた場合は、それも拒否になる';
-        await bridge.postCard(at.channel, noticeCard(text, true, 'muted'), at.threadTs);
-      }
+      await withFeature(session, '!stop', (s) => interruptClaude(wiring, s, at, byUserId));
       return;
     case 'keepalive':
     case 'keepalive on':
-    case 'keepalive off': {
-      if (!keepalive) {
-        await unavailable('!keepalive');
-        return;
-      }
-      if (command !== 'keepalive') {
-        keepalive.setEnabled(command === 'keepalive on');
-        logger.info(`keepalive を ${command === 'keepalive on' ? '有効' : '無効'}にした by=${byUserId}`);
-      }
-      const s = keepalive.status();
-      const next = s.nextAt ? `次は ${formatTime(s.nextAt)}` : '予定なし（Claude が次に応答を終えたら決まる）';
-      const text = s.enabled
-        ? `♻️ キャッシュのつなぎ止め: 有効（${next}、送った回数 ${s.sent}/${s.max}）`
-        : '♻️ キャッシュのつなぎ止め: 無効（起動し直すと .env の設定に戻る）';
-      await bridge.postText(at.channel, text, at.threadTs);
+    case 'keepalive off':
+      await withFeature(keepalive, '!keepalive', (k) => switchKeepalive(wiring, k, command, at, byUserId));
       return;
-    }
     case 'rules':
-      if (rules) await rules.list(at.channel, at.threadTs);
-      else await unavailable('!rules');
+      await withFeature(rules, '!rules', (r) => r.list(at.channel, at.threadTs));
       return;
     case 'status':
       await bridge.postText(at.channel, status(), at.threadTs);
       return;
     case 'restart':
     case 'restart force':
-      if (session) await session.restart(at, byUserId, command === 'restart force');
-      else await unavailable('!restart');
+      await withFeature(session, '!restart', (s) => s.restart(at, byUserId, command === 'restart force'));
       return;
     case 'compact':
-      if (session) await session.compact(at, byUserId);
-      else await unavailable('!compact');
+      await withFeature(session, '!compact', (s) => s.compact(at, byUserId));
       return;
     case 'clear':
-      if (session) await session.clear(at, byUserId);
-      else await unavailable('!clear');
+      await withFeature(session, '!clear', (s) => s.clear(at, byUserId));
       return;
     case 'lock':
-      if (!sessionAllow) {
-        await unavailable('!lock');
-        return;
-      }
-      if (sessionAllow.disable()) {
-        logger.info(`全部許可を解除 by=${byUserId}（!lock）`);
-        await bridge.postText(at.channel, '🔒 「このセッション中は全部許可」を解除した。次からはまたボタンで確認する', at.threadTs);
-      } else {
-        await bridge.postText(at.channel, '「このセッション中は全部許可」は有効になっていない', at.threadTs);
-      }
+      await withFeature(sessionAllow, '!lock', (a) => releaseSessionAllow(wiring, a, at, byUserId));
       return;
     default:
       assertNever(command);
+  }
+}
+
+/** `!stop`: Esc を送って Claude の作業を中断する */
+async function interruptClaude({ bridge, watchdog, stopTyping }: Wiring, session: AppSession, at: ThreadRef, byUserId: string): Promise<void> {
+  if (!(await session.interrupt(at, byUserId))) return;
+
+  // 中断したので、返事が無いという警告と入力中の表示はもう出さない
+  watchdog.activity();
+  stopTyping?.();
+  const text = '⏹ Esc を送って中断した。次の指示を待っている。ターミナルで確認が開いていた場合は、それも拒否になる';
+  await bridge.postCard(at.channel, noticeCard(text, true, 'muted'), at.threadTs);
+}
+
+/** `!keepalive`（`on` / `off` なら切り替えてから）: つなぎ止めの状態を返す */
+async function switchKeepalive(
+  { bridge, logger }: Wiring,
+  keepalive: NonNullable<Wiring['keepalive']>,
+  command: Extract<Command, 'keepalive' | 'keepalive on' | 'keepalive off'>,
+  at: ThreadRef,
+  byUserId: string
+): Promise<void> {
+  if (command !== 'keepalive') {
+    keepalive.setEnabled(command === 'keepalive on');
+    logger.info(`keepalive を ${command === 'keepalive on' ? '有効' : '無効'}にした by=${byUserId}`);
+  }
+
+  const s = keepalive.status();
+  const next = s.nextAt ? `次は ${formatTime(s.nextAt)}` : '予定なし（Claude が次に応答を終えたら決まる）';
+  const text = s.enabled
+    ? `♻️ キャッシュのつなぎ止め: 有効（${next}、送った回数 ${s.sent}/${s.max}）`
+    : '♻️ キャッシュのつなぎ止め: 無効（起動し直すと .env の設定に戻る）';
+  await bridge.postText(at.channel, text, at.threadTs);
+}
+
+/** `!lock`: 「このセッション中は全部許可」を解除する */
+async function releaseSessionAllow({ bridge, logger }: Wiring, sessionAllow: SessionAllowAll, at: ThreadRef, byUserId: string): Promise<void> {
+  if (sessionAllow.disable()) {
+    logger.info(`全部許可を解除 by=${byUserId}（!lock）`);
+    await bridge.postText(at.channel, '🔒 「このセッション中は全部許可」を解除した。次からはまたボタンで確認する', at.threadTs);
+  } else {
+    await bridge.postText(at.channel, '「このセッション中は全部許可」は有効になっていない', at.threadTs);
   }
 }
 
@@ -420,25 +440,42 @@ export async function handleAction(wiring: Wiring, parsed: ActionParse, ctx: Act
       return;
 
     case 'screen_show':
-      if (at) await wiring.screen.show(at.channel, at.threadTs);
-      return;
-
     case 'screen_pick':
-      if (at) await wiring.screen.pick(parsed.snapshotId, parsed.index, at, byUserId);
-      return;
-
     case 'rule_confirm':
-      if (at && wiring.rules) await wiring.rules.confirm(parsed.proposalId, parsed.accept, at, byUserId);
-      return;
-
     case 'rule_remove':
-      if (at && wiring.rules) await wiring.rules.remove(parsed.listId, parsed.index, at, byUserId);
-      return;
-
     case 'file_confirm':
-      if (at && wiring.files) await wiring.files.confirm(parsed.confirmId, parsed.accept, at, byUserId);
+      // 結果の書き換え先・投稿先が要るので、チャンネルが分からなければ何もしない
+      if (at) await handlePressedAt(wiring, parsed, at, byUserId);
       return;
 
+    default:
+      assertNever(parsed);
+  }
+}
+
+/** 押されたメッセージの位置が分かっているときだけ扱うボタン（画面の確認・選択、許可ルール、ファイル送信の確認） */
+async function handlePressedAt(
+  { screen, rules, files }: Wiring,
+  parsed: Extract<ActionParse, { kind: 'screen_show' | 'screen_pick' | 'rule_confirm' | 'rule_remove' | 'file_confirm' }>,
+  at: PressedMessage,
+  byUserId: string
+): Promise<void> {
+  switch (parsed.kind) {
+    case 'screen_show':
+      await screen.show(at.channel, at.threadTs);
+      return;
+    case 'screen_pick':
+      await screen.pick(parsed.snapshotId, parsed.index, at, byUserId);
+      return;
+    case 'rule_confirm':
+      await rules?.confirm(parsed.proposalId, parsed.accept, at, byUserId);
+      return;
+    case 'rule_remove':
+      await rules?.remove(parsed.listId, parsed.index, at, byUserId);
+      return;
+    case 'file_confirm':
+      await files?.confirm(parsed.confirmId, parsed.accept, at, byUserId);
+      return;
     default:
       assertNever(parsed);
   }
@@ -455,14 +492,6 @@ function pressedMessage(ctx: ActionContext): PressedMessage | undefined {
 }
 
 /**
- * input_preview をコードブロックで包む。中身の ``` は card.ts の fence が分けるので、
- * フェンスの開閉と誤認されない（分割送信時の開き直しも崩れない）。
- */
-export function fencePreview(preview: string): string {
-  return fence(preview);
-}
-
-/**
  * See more: ボタンのメッセージでは省略した input_preview の全文をスレッドに送る。
  * 不可視文字（双方向制御・ゼロ幅・BOM）は revealInvisible で `\u{XXXX}` に置き換えてから送る。
  * 長いときは postText がコードブロックを保ったまま複数メッセージに分ける。期限切れならその旨だけ送る。
@@ -475,7 +504,8 @@ async function sendFullPreview({ bridge, relay, logger }: Wiring, requestId: str
   const req = relay.lookup(requestId);
   try {
     if (req) {
-      await bridge.postText(at.channel, fencePreview(revealInvisible(req.input_preview)), at.threadTs);
+      // 中身の ``` は fence が分けるので、フェンスの開閉と誤認されない（分割送信時の開き直しも崩れない）
+      await bridge.postText(at.channel, fence(revealInvisible(req.input_preview)), at.threadTs);
     } else {
       await bridge.postText(at.channel, `⌛ permission request ${requestId} は既に期限切れ`, at.threadTs);
     }
