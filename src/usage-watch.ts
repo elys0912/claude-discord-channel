@@ -1,9 +1,9 @@
 // 使用量とコンテキストの見張り。statusline（statusline.ts）が書く usage.json を定期的に読み、
 // 使用量（5 時間枠・7 日枠）とコンテキストの使用率がしきい値を越えたら知らせる。使用量の上限に当たった後、
 // 枠のリセット時刻を過ぎたら「上限が戻った」を知らせる（Claude に作業の再開は送らない。続けるかは人が決める）。
-import fs from 'node:fs';
 import type { Logger } from './log.js';
 import { formatTime } from './text.js';
+import { isObject, readJsonFile } from './state-file.js';
 import type { UsageSnapshot, UsageWindow } from './statusline.js';
 
 export const DEFAULT_USAGE_WARN_PCT: readonly number[] = [80, 95];
@@ -28,16 +28,14 @@ export function parsePercents(text: string): number[] {
   return [...new Set(values)].sort((a, b) => a - b);
 }
 
+/** 記録時刻（at）だけを確かめる。ほかの欄は statusline.ts が書いた形のまま信じる */
+function isUsageSnapshot(value: unknown): value is UsageSnapshot {
+  return isObject(value) && typeof value.at === 'number';
+}
+
 /** usage.json を読む。無い・壊れていれば undefined */
 export function readUsage(file: string): UsageSnapshot | undefined {
-  try {
-    const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
-    return typeof parsed === 'object' && parsed !== null && typeof (parsed as UsageSnapshot).at === 'number'
-      ? (parsed as UsageSnapshot)
-      : undefined;
-  } catch {
-    return undefined;
-  }
+  return readJsonFile(file, isUsageSnapshot);
 }
 
 /** used が越えたしきい値のうち最大のもの。越えていなければ undefined */

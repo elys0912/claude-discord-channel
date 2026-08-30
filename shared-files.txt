@@ -34,6 +34,7 @@ src/screen.ts
 src/session-allow.ts
 src/session-control.ts
 src/settings-files.ts
+src/state-file.ts
 src/status.ts
 src/statusline.ts
 src/stdio-guard.ts

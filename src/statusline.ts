@@ -8,6 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { stateDir } from './config.js';
 import { SESSION_TAG_ENV } from './hook-event.js';
 import { errMessage } from './errors.js';
+import { isObject, writeFileAtomic } from './state-file.js';
 
 /** 状態ディレクトリに置く使用量の記録 */
 export const USAGE_FILE = 'usage.json';
@@ -30,10 +31,6 @@ export interface UsageSnapshot {
   context?: { used: number; size?: number };
   five_hour?: UsageWindow;
   seven_day?: UsageWindow;
-}
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
 }
 
 function finiteNumber(value: unknown): number | undefined {
@@ -110,12 +107,9 @@ export function writeUsage(dir: string, snapshot: UsageSnapshot): boolean {
 
   fs.mkdirSync(dir, { recursive: true });
   const text = JSON.stringify(snapshot) + '\n';
-  const temp = `${file}.${process.pid}.tmp`;
-  fs.writeFileSync(temp, text);
   try {
-    fs.renameSync(temp, file);
+    writeFileAtomic(file, text);
   } catch {
-    fs.rmSync(temp, { force: true });
     fs.writeFileSync(file, text);
   }
   return true;
