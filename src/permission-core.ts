@@ -141,6 +141,11 @@ function takeHead(units: readonly string[], budget: number): string[] {
   return out;
 }
 
+/** units の末尾から、UTF-16 長の合計が budget 以内に収まるだけ取る（並びは元の順） */
+function takeTail(units: readonly string[], budget: number): string[] {
+  return takeHead(units.slice().reverse(), budget).reverse();
+}
+
 function unitsLength(units: readonly string[]): number {
   return units.reduce((n, u) => n + u.length, 0);
 }
@@ -169,7 +174,7 @@ export function truncateHeadTail(text: string, maxLen: number): { text: string; 
   const budget = Math.max(0, maxLen - marker(total).length);
   const tailBudget = Math.floor(budget * PREVIEW_TAIL_RATIO);
   const head = takeHead(units, budget - tailBudget);
-  const tail = takeHead([...units.slice(head.length)].reverse(), tailBudget).reverse();
+  const tail = takeTail(units.slice(head.length), tailBudget);
   const omitted = total - unitsLength(head) - unitsLength(tail);
   return { text: head.join('') + marker(omitted) + tail.join(''), truncated: true };
 }
