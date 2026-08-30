@@ -225,6 +225,8 @@ describe('loadAccess', () => {
     ['数字でない ID', { guildId: 'abc', allowFrom: [USER] }, /guildId の形式が不正/],
     ['短すぎる ID', { guildId: GUILD, allowFrom: ['12345'] }, /allowFrom の形式が不正/],
     ['channels の重複', { guildId: GUILD, allowFrom: [USER], channels: [CHANNEL, CHANNEL] }, /channels に重複がある/],
+    ['ciWebhooks の重複', { guildId: GUILD, allowFrom: [USER], ciWebhooks: [CHANNEL, CHANNEL] }, /ciWebhooks に重複がある/],
+    ['ciWebhooks の形', { guildId: GUILD, allowFrom: [USER], ciWebhooks: ['hook'] }, /ciWebhooks の形式が不正/],
     ['allowFrom の重複', { guildId: GUILD, allowFrom: [USER, USER] }, /allowFrom に重複がある/],
     ['空の allowFrom', { guildId: GUILD, allowFrom: [] }, /allowFrom は1件以上必要/],
     ['未知のキー', { guildId: GUILD, allowFrom: [USER], teamId: 'T123' }, /access.json の検証に失敗/],

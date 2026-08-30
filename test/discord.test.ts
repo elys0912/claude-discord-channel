@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ChannelType } from 'discord.js';
-import { DiscordBridge, normalizeBotRoleMentions } from '../src/discord.js';
+import { DiscordBridge, embedText, normalizeBotRoleMentions } from '../src/discord.js';
 import { Logger } from '../src/log.js';
 
 const BOT = '1558801069306282134';
@@ -98,5 +98,23 @@ describe('DiscordBridge の送り先（フォーラムとスレッド）', () =>
     const { bridge, sent } = setup();
     await expect(bridge.postText(FORUM, 'x', OTHER_POST)).rejects.toThrow(/送信できないチャンネル/);
     expect(sent).toEqual([]);
+  });
+});
+
+describe('embedText', () => {
+  it('embed の見出し・URL・本文・項目・注記を文字にする。無ければ undefined', () => {
+    const message = {
+      embeds: [
+        {
+          title: 'CI #12 failed',
+          url: 'https://github.com/o/r/actions/runs/1',
+          description: 'test (windows-latest)',
+          fields: [{ name: 'branch', value: 'main' }],
+          footer: { text: 'GitHub Actions' },
+        },
+      ],
+    } as unknown as Parameters<typeof embedText>[0];
+    expect(embedText(message)).toBe('CI #12 failed\nhttps://github.com/o/r/actions/runs/1\ntest (windows-latest)\nbranch: main\nGitHub Actions');
+    expect(embedText({ embeds: [] })).toBeUndefined();
   });
 });
