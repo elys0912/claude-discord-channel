@@ -11,7 +11,7 @@ import { DiscordBridge } from './discord.js';
 import { DEFAULT_INLINE_LIMITS } from './inline-text.js';
 import type { InlineDeps } from './inline-text.js';
 import { startBridgeApp, startDegradedApp } from './app.js';
-import type { BridgeAppOptions } from './app.js';
+import type { BridgeAppOptions, RunningApp } from './app.js';
 import { replyTimeoutMs } from './watchdog.js';
 import { PowerShellConsole, findConsoleScript } from './console.js';
 import { HOOK_LOG_FILE, SESSION_TAG_ENV } from './hook-event.js';
@@ -112,19 +112,7 @@ async function main(dir: string, logger: Logger): Promise<void> {
   );
 
   if (degraded) {
-    // 縮退中もロックを取り直し、取れたら同じ MCP サーバーのまま通常のブリッジに戻る（終了処理は縮退モードの stop が引き継ぐ）
-    const app = await startDegradedApp({
-      logger,
-      relock: {
-        lock,
-        promote: async (server) => {
-          // 縮退の間に .env や access.json を直していてもよいよう、戻るときに読み直す（読めなければ縮退のまま次の間隔で取り直す）
-          const fresh = { tokens: loadTokens(dir, envWarner(logger)), access: loadAccess(dir) };
-          const bridge = await initBridge(fresh.tokens, fresh.access, logger);
-          return startBridgeApp({ ...bridgeAppOptions(dir, fresh.tokens, logger, bridge), lock, server });
-        },
-      },
-    });
+    const app = await runDegraded(dir, lock, logger);
     // 戻った後や戻る途中にロックを取られたら、縮退モードごと止める（戻る途中なら、終わるのを待ってから通常のブリッジを止める）
     stopApp = app.stop;
     installShutdown(logger, app.stop);
@@ -145,6 +133,25 @@ async function main(dir: string, logger: Logger): Promise<void> {
     onCleanupReady: (stop) => {
       stopApp = stop;
       installShutdown(logger, stop);
+    },
+  });
+}
+
+/**
+ * 縮退モードで起動する。縮退中もロックを取り直し、取れたら同じ MCP サーバーのまま通常のブリッジに戻る
+ * （終了処理は縮退モードの stop が引き継ぐ）
+ */
+function runDegraded(dir: string, lock: InstanceLock, logger: Logger): Promise<RunningApp> {
+  return startDegradedApp({
+    logger,
+    relock: {
+      lock,
+      promote: async (server) => {
+        // 縮退の間に .env や access.json を直していてもよいよう、戻るときに読み直す（読めなければ縮退のまま次の間隔で取り直す）
+        const fresh = { tokens: loadTokens(dir, envWarner(logger)), access: loadAccess(dir) };
+        const bridge = await initBridge(fresh.tokens, fresh.access, logger);
+        return startBridgeApp({ ...bridgeAppOptions(dir, fresh.tokens, logger, bridge), lock, server });
+      },
     },
   });
 }
