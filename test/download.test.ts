@@ -206,11 +206,11 @@ describe('extractArchive', () => {
 describe('downloadAttachment', () => {
   const REF: AttachmentRef = { chatId: 'D1', messageId: '100', attachmentId: '200' };
 
-  function fakeBridge(info: Partial<RemoteFile>, body: BodyInit | null): DownloadDeps['bridge'] & { fetched: number; asked: AttachmentRef[] } {
+  function fakeBridge(info: Partial<RemoteFile>, body: BodyInit | null): Pick<DownloadDeps<AttachmentRef>, 'info' | 'fetch'> & { fetched: number; asked: AttachmentRef[] } {
     const bridge = {
       fetched: 0,
       asked: [] as AttachmentRef[],
-      attachmentInfo: async (ref: AttachmentRef): Promise<RemoteFile> => {
+      info: async (ref: AttachmentRef): Promise<RemoteFile> => {
         bridge.asked.push(ref);
         return {
           id: ref.attachmentId,
@@ -221,7 +221,7 @@ describe('downloadAttachment', () => {
           ...info,
         };
       },
-      fetchFile: async (): Promise<Response> => {
+      fetch: async (): Promise<Response> => {
         bridge.fetched += 1;
         return new Response(body);
       },
@@ -231,51 +231,51 @@ describe('downloadAttachment', () => {
 
   it('添付の場所を渡して情報を引き、送信者のファイル名を無害化して保存先に保存する', async () => {
     const bridge = fakeBridge({ name: '../../evil.txt' }, 'hello');
-    const result = await downloadAttachment({ bridge, dir, limits: LIMITS }, REF, false);
+    const result = await downloadAttachment({ ...bridge, dir, limits: LIMITS }, REF, false);
     expect(bridge.asked).toEqual([REF]);
     expect(result).toBe(`saved: ${path.join(dir, 'evil.txt')} (5 bytes)`);
     expect(fs.readFileSync(path.join(dir, 'evil.txt'), 'utf8')).toBe('hello');
   });
 
   it('名前が空なら添付の ID を名前にする', async () => {
-    await downloadAttachment({ bridge: fakeBridge({ name: '' }, 'x'), dir, limits: LIMITS }, REF, false);
+    await downloadAttachment({ ...fakeBridge({ name: '' }, 'x'), dir, limits: LIMITS }, REF, false);
     expect(fs.readdirSync(dir)).toEqual(['200']);
   });
 
   it('同じ名前があれば番号を付けて保存する', async () => {
     fs.writeFileSync(path.join(dir, 'a.txt'), 'old');
-    await downloadAttachment({ bridge: fakeBridge({}, 'new'), dir, limits: LIMITS }, REF, false);
+    await downloadAttachment({ ...fakeBridge({}, 'new'), dir, limits: LIMITS }, REF, false);
     expect(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8')).toBe('old');
     expect(fs.readFileSync(path.join(dir, 'a (1).txt'), 'utf8')).toBe('new');
   });
 
   it('添付の情報のサイズが上限を超えていれば取りに行かない', async () => {
     const bridge = fakeBridge({ size: LIMITS.maxDownloadBytes + 1 }, 'x');
-    await expect(downloadAttachment({ bridge, dir, limits: LIMITS }, REF, false)).rejects.toThrow(/大きすぎる/);
+    await expect(downloadAttachment({ ...bridge, dir, limits: LIMITS }, REF, false)).rejects.toThrow(/大きすぎる/);
     expect(bridge.fetched).toBe(0);
     expect(fs.readdirSync(dir)).toEqual([]);
   });
 
   it('受信中に上限を超えたら止めて、書きかけを消す（情報のサイズと実物が違っても守る）', async () => {
     const bridge = fakeBridge({ size: 10 }, Buffer.alloc(2000));
-    await expect(downloadAttachment({ bridge, dir, limits: { ...LIMITS, maxDownloadBytes: 1000 } }, REF, false)).rejects.toThrow(/上限/);
+    await expect(downloadAttachment({ ...bridge, dir, limits: { ...LIMITS, maxDownloadBytes: 1000 } }, REF, false)).rejects.toThrow(/上限/);
     expect(fs.readdirSync(dir)).toEqual([]);
   });
 
   it('保存先が無ければ投げる', async () => {
     const missing = path.join(dir, 'missing');
-    await expect(downloadAttachment({ bridge: fakeBridge({}, 'x'), dir: missing, limits: LIMITS }, REF, false)).rejects.toThrow(/保存先/);
+    await expect(downloadAttachment({ ...fakeBridge({}, 'x'), dir: missing, limits: LIMITS }, REF, false)).rejects.toThrow(/保存先/);
   });
 
   it('extract で gzip を展開する', async () => {
     const bridge = fakeBridge({ name: 'log.txt.gz' }, zlib.gzipSync('hello'));
-    const result = await downloadAttachment({ bridge, dir, limits: LIMITS }, REF, true);
+    const result = await downloadAttachment({ ...bridge, dir, limits: LIMITS }, REF, true);
     expect(result).toContain(`extracted: ${path.join(dir, 'log.txt')} (1 files, 5 bytes)`);
     expect(fs.existsSync(path.join(dir, 'log.txt.gz'))).toBe(true);
   });
 
   it('extract でも圧縮ファイルでなければ保存だけする', async () => {
-    const result = await downloadAttachment({ bridge: fakeBridge({}, 'x'), dir, limits: LIMITS }, REF, true);
+    const result = await downloadAttachment({ ...fakeBridge({}, 'x'), dir, limits: LIMITS }, REF, true);
     expect(result).toContain('展開していない');
   });
 });

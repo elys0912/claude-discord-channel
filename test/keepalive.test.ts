@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Keepalive, inQuietHours, parseQuietHours } from '../src/keepalive.js';
+import { Keepalive, inQuietHours, keepaliveStatusLine, parseQuietHours } from '../src/keepalive.js';
 import type { KeepaliveOptions } from '../src/keepalive.js';
 import { Logger } from '../src/log.js';
 
@@ -125,5 +125,15 @@ describe('Keepalive', () => {
     expect(k.status().nextAt?.getTime()).toBe(START + 55 * MIN);
     await vi.advanceTimersByTimeAsync(45 * MIN);
     expect(sent).toBe(1);
+  });
+});
+
+describe('keepaliveStatusLine', () => {
+  it('有効なら次の時刻と回数、無効なら有効にする方法を書く', () => {
+    expect(keepaliveStatusLine({ enabled: true, nextAt: new Date(2026, 9, 1, 11, 25), sent: 1, max: 6 })).toBe(
+      'キャッシュのつなぎ止め: 有効（次は 2026-10-01 11:25、送った回数 1/6）'
+    );
+    expect(keepaliveStatusLine({ enabled: true, nextAt: undefined, sent: 6, max: 6 })).toContain('予定なし');
+    expect(keepaliveStatusLine({ enabled: false, nextAt: undefined, sent: 0, max: 6 })).toContain('無効');
   });
 });

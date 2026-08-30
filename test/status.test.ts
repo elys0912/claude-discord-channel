@@ -26,13 +26,11 @@ describe('buildStatusText', () => {
     expect(text).toContain('10:21 StopFailure (rate_limit)');
   });
 
-  it('キャッシュのつなぎ止めの状態を書く（機能が無ければ書かない）', () => {
+  it('チャネル固有の行（extraLines）を全部許可の後、hook の前に足す', () => {
     const base = { startedAt: now, workDir: '', discordConnected: true, waitingSince: undefined, pendingPermissions: 0, lastHooks: [], now };
-    expect(buildStatusText({ ...base, keepalive: { enabled: true, nextAt: new Date(2026, 9, 1, 11, 25), sent: 1, max: 6 } })).toContain(
-      'キャッシュのつなぎ止め: 有効（次は 2026-10-01 11:25、送った回数 1/6）'
-    );
-    expect(buildStatusText({ ...base, keepalive: { enabled: false, nextAt: undefined, sent: 0, max: 6 } })).toContain('無効');
-    expect(buildStatusText(base)).not.toContain('つなぎ止め');
+    const lines = buildStatusText({ ...base, sessionAllowSince: null, extraLines: ['追加の行'] }).split('\n');
+    expect(lines.indexOf('追加の行')).toBe(lines.indexOf('全部許可: 無効') + 1);
+    expect(buildStatusText(base)).toBe(buildStatusText({ ...base, extraLines: [] }));
   });
 
   it('待っていない・hook 無し・接続不明も書ける', () => {

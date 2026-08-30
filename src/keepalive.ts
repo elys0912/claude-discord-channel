@@ -3,6 +3,7 @@
 // （通常の 2 倍。読むだけなら 0.1 倍）ので、最後に Claude が動いてから少し前に短いメッセージを 1 回送ってつなぎ止める。
 // 書き直し 1 回はつなぎ止め約 20 回ぶんなので、回数に上限を付け、送らない時間帯も設ける。
 import type { Logger } from './log.js';
+import { formatTime } from './text.js';
 
 export interface QuietHours {
   /** 0 時からの分（この時刻から送らない） */
@@ -57,6 +58,13 @@ export interface KeepaliveStatus {
   nextAt: Date | undefined;
   sent: number;
   max: number;
+}
+
+/** `!status` に出すキャッシュのつなぎ止めの行 */
+export function keepaliveStatusLine(k: KeepaliveStatus): string {
+  if (!k.enabled) return 'キャッシュのつなぎ止め: 無効（!keepalive on で有効）';
+  const next = k.nextAt ? `次は ${formatTime(k.nextAt)}` : '予定なし';
+  return `キャッシュのつなぎ止め: 有効（${next}、送った回数 ${k.sent}/${k.max}）`;
 }
 
 export class Keepalive {

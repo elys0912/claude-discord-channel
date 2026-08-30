@@ -7,12 +7,11 @@ import { Readable, Transform } from 'node:stream';
 import type { ReadableStream as WebReadableStream } from 'node:stream/web';
 import { pipeline } from 'node:stream/promises';
 import zlib from 'node:zlib';
-import type { AttachmentRef, DiscordBridge, RemoteFile } from './discord.js';
 import { systemExe } from './system-exe.js';
 import { clip } from './text.js';
 
 const BYTES_PER_GIB = 1024 ** 3;
-/** ダウンロードの上限（Discord の添付は Nitro でも 500MB までなので、余裕を持って 1GB） */
+/** ダウンロードの上限（1GB。どちらのチャネルでも、添付の上限より大きい） */
 export const MAX_DOWNLOAD_BYTES = BYTES_PER_GIB;
 /** 展開後の合計サイズの上限（ZIP 爆弾対策） */
 export const MAX_EXTRACT_BYTES = 4 * BYTES_PER_GIB;
@@ -254,21 +253,35 @@ async function runTar(tarPath: string, archive: string, dir: string, limits: Ext
   }
 }
 
-export interface DownloadDeps {
-  bridge: Pick<DiscordBridge, 'attachmentInfo' | 'fetchFile'>;
+/** 取りに行く添付の情報（チャネルの側で作る） */
+export interface RemoteFile {
+  id: string;
+  name: string;
+  size?: number | undefined;
+  mimetype?: string | undefined;
+  /** ダウンロード用の URL */
+  url: string;
+}
+
+/** Ref は添付の指し方（チャネルごとに違う。ファイル ID や、メッセージと添付の ID）。F はチャネルの側の添付の情報 */
+export interface DownloadDeps<Ref, F extends RemoteFile = RemoteFile> {
+  /** 添付の情報を引く */
+  info: (ref: Ref) => Promise<F>;
+  /** 添付の中身を取る */
+  fetch: (file: F, signal: AbortSignal) => Promise<Response>;
   /** 保存先（.env の DOWNLOAD_DIR） */
   dir: string;
   limits?: (ExtractLimits & { maxDownloadBytes: number }) | undefined;
   tarPath?: string | undefined;
 }
 
-/** Discord の添付を dir に保存し、extract なら展開もする。Claude に返す結果の文面を返す */
-export async function downloadAttachment(deps: DownloadDeps, ref: AttachmentRef, extract: boolean): Promise<string> {
+/** 添付を dir に保存し、extract なら展開もする。Claude に返す結果の文面を返す */
+export async function downloadAttachment<Ref, F extends RemoteFile>(deps: DownloadDeps<Ref, F>, ref: Ref, extract: boolean): Promise<string> {
   const limits = deps.limits ?? DEFAULT_LIMITS;
   const dirStat = await fsp.stat(deps.dir).catch(() => undefined);
   if (!dirStat?.isDirectory()) throw new Error(`保存先のフォルダーが無い: ${deps.dir}`);
 
-  const info: RemoteFile = await deps.bridge.attachmentInfo(ref);
+  const info = await deps.info(ref);
   if (info.size !== undefined && info.size > limits.maxDownloadBytes) {
     throw new Error(`ファイルが大きすぎる（${info.size} バイト、上限 ${limits.maxDownloadBytes} バイト）`);
   }
@@ -276,7 +289,7 @@ export async function downloadAttachment(deps: DownloadDeps, ref: AttachmentRef,
   const target = createUnique(deps.dir, sanitizeFileName(info.name, info.id), 'file');
   let bytes: number;
   try {
-    const res = await deps.bridge.fetchFile(info, AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS));
+    const res = await deps.fetch(info, AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS));
     if (!res.body) throw new Error('ダウンロードの本文が空');
     bytes = await writeLimited(Readable.fromWeb(res.body as WebReadableStream<Uint8Array>), target, limits.maxDownloadBytes, 'ダウンロードのサイズ');
   } catch (e) {

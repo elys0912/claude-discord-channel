@@ -785,13 +785,11 @@ describe('createToolHandlers 単体', () => {
       new Logger({ stderr: false }),
       onActivity,
       {
-        bridge: {
-          attachmentInfo: async () => {
-            throw new Error('not found');
-          },
-          fetchFile: async () => {
-            throw new Error('not found');
-          },
+        info: async () => {
+          throw new Error('not found');
+        },
+        fetch: async () => {
+          throw new Error('not found');
         },
         dir: os.tmpdir(),
       },
@@ -1566,7 +1564,7 @@ describe('添付ファイル', () => {
 
   it('DOWNLOAD_DIR があれば download_file で添付を保存できる', async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-download-'));
-    h = await startHarness(ACCESS, undefined, (discord) => ({ download: { bridge: discord, dir } }));
+    h = await startHarness(ACCESS, undefined, (discord) => ({ download: { info: (ref) => discord.attachmentInfo(ref), fetch: (file) => discord.fetchFile(file), dir } }));
     h.discord.attachments.set('9200', { name: 'data.csv', body: 'a,b\n1,2\n' });
 
     const tools = await h.client.listTools();
