@@ -33,6 +33,9 @@ export function newToken(): string {
     .padEnd(TOKEN_ID_LENGTH, '0');
 }
 
+/** 1 分のミリ秒（待ち時間・経過時間の分への換算に使う） */
+export const MS_PER_MINUTE = 60000;
+
 /** 日時を `YYYY-MM-DD HH:mm`（ローカル時刻）にする */
 export function formatTime(d: Date): string {
   const pad = (n: number): string => String(n).padStart(2, '0');

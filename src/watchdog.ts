@@ -3,10 +3,10 @@
 // Discord からは「👀 は付いたのに何も返ってこない」ようにしか見えないため、一定時間で警告を出す。
 import type { Logger } from './log.js';
 import type { ThreadRef } from './types.js';
+import { MS_PER_MINUTE } from './text.js';
 
 /** 既定の待ち時間（分） */
 export const DEFAULT_REPLY_TIMEOUT_MIN = 5;
-export const MS_PER_MINUTE = 60000;
 
 /** 見張るスレッド */
 export type WatchdogTarget = ThreadRef;
@@ -17,6 +17,7 @@ export interface WatchdogOptions {
   logger: Logger;
   /** 無応答のまま待ち時間を過ぎたときに呼ぶ。投げても見張りは止まらない */
   notify: (target: WatchdogTarget, minutes: number) => Promise<void>;
+  now?: (() => number) | undefined;
 }
 
 /**
@@ -28,6 +29,7 @@ export class ResponseWatchdog {
   private readonly timeoutMs: number;
   private readonly logger: Logger;
   private readonly notify: WatchdogOptions['notify'];
+  private readonly now: () => number;
   private timer: ReturnType<typeof setTimeout> | undefined;
   /** 最後にメッセージを渡してから応答が無い間、渡した時刻（epoch ms）。応答があれば undefined */
   private waitingSinceMs: number | undefined;
@@ -36,11 +38,12 @@ export class ResponseWatchdog {
     this.timeoutMs = opts.timeoutMs;
     this.logger = opts.logger;
     this.notify = opts.notify;
+    this.now = opts.now ?? Date.now;
   }
 
   /** Claude にメッセージを渡した。待ち時間を最初から数え直す */
   delivered(target: WatchdogTarget): void {
-    this.waitingSinceMs = Date.now();
+    this.waitingSinceMs = this.now();
     if (this.timeoutMs <= 0) return;
     this.clear();
     const timer = setTimeout(() => {
@@ -57,10 +60,9 @@ export class ResponseWatchdog {
     this.clear();
   }
 
-  /** 終了時用。見張りを解く */
+  /** 終了時用。見張りを解く（中身は activity と同じ） */
   stop(): void {
-    this.waitingSinceMs = undefined;
-    this.clear();
+    this.activity();
   }
 
   /** メッセージを渡したまま応答を受け取っていない（警告を出した後も含む）。見張りが無効でも分かる */
