@@ -29,17 +29,25 @@ export function readJsonFile<T>(file: string, guard: (value: unknown) => value i
   return parseJson(text, guard);
 }
 
+export interface WriteFileAtomicOptions {
+  /** 一時ファイルの名前に入れる pid。既定は process.pid */
+  pid?: number | undefined;
+  /** 置き換えに失敗したとき一時ファイルを消すか。既定は true */
+  removeTempOnError?: boolean | undefined;
+}
+
 /**
  * 同じフォルダーの一時ファイルに書いてから置き換える（読み手に書きかけを見せない）。フォルダーは呼び出し側で作る。
- * 置き換えに失敗したら一時ファイルを消して投げる（Windows では読み手が開いている間の置き換えが失敗しうる）
+ * 置き換えに失敗したら投げる（Windows では読み手が開いている間の置き換えが失敗しうる）
  */
-export function writeFileAtomic(file: string, text: string): void {
-  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.tmp.${process.pid}.${Math.random().toString(36).slice(2)}`);
+export function writeFileAtomic(file: string, text: string, opts: WriteFileAtomicOptions = {}): void {
+  const pid = opts.pid ?? process.pid;
+  const tmp = path.join(path.dirname(file), `.${path.basename(file)}.tmp.${pid}.${Math.random().toString(36).slice(2)}`);
   fs.writeFileSync(tmp, text);
   try {
     fs.renameSync(tmp, file);
   } catch (e) {
-    fs.rmSync(tmp, { force: true });
+    if (opts.removeTempOnError ?? true) fs.rmSync(tmp, { force: true });
     throw e;
   }
 }
