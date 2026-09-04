@@ -33,17 +33,8 @@ describe('hookToNotice', () => {
     expect(notice?.screenButton).toBe(button);
   });
 
-  it('permission_prompt は Discord に中継中（pending）なら黙る', () => {
-    expect(hookToNotice(ev({ hook_event_name: 'Notification', notification_type: 'permission_prompt' }), { waiting: true, pending: 1 })).toBeUndefined();
-  });
-
-  it('idle_prompt と Stop は Discord に返事が無いときだけ知らせる', () => {
-    const idlePrompt = ev({ hook_event_name: 'Notification', notification_type: 'idle_prompt', message: 'waiting' });
-    expect(hookToNotice(idlePrompt, idle)).toBeUndefined();
-    expect(hookToNotice(idlePrompt, waiting)?.screenButton).toBe(true);
-    const stop = ev({ hook_event_name: 'Stop' });
-    expect(hookToNotice(stop, idle)).toBeUndefined();
-    expect(hookToNotice(stop, waiting)?.text).toContain('返事をしないまま');
+  it('Stop で Discord に返事が無いときは「返事をしないまま」と知らせる', () => {
+    expect(hookToNotice(ev({ hook_event_name: 'Stop' }), waiting)?.text).toContain('返事をしないまま');
   });
 
   // Stop / idle_prompt は Discord の返事待ち（waiting）のときだけ、permission_prompt は中継中（pending）でないときだけ
@@ -57,6 +48,7 @@ describe('hookToNotice', () => {
     ['Notification', 'permission_prompt', false, 0, true],
     ['Notification', 'permission_prompt', true, 0, true],
     ['Notification', 'permission_prompt', false, 1, false],
+    ['Notification', 'permission_prompt', true, 1, false],
   ] as const)('%s/%s waiting=%s pending=%s → 知らせる=%s', (name, type, isWaiting, pending, expected) => {
     const event = ev({ hook_event_name: name, ...(type ? { notification_type: type } : {}) });
     const notice = hookToNotice(event, { waiting: isWaiting, pending });
