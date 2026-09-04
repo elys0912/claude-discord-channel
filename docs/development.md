@@ -104,6 +104,8 @@ GitHub Actions（`.github/workflows/ci.yml`）は、main への push と pull re
 | `config/*.example*` | `projects.json` / `access.json` / `.env` / `extra-mcp.json` のひな形 |
 | `test/*.test.ts` | vitest のテスト |
 | `test/helpers/fake-discord.ts` | `DiscordBridge` の差し替え（送ったものを記録する。`app.test.ts` などで共用） |
+| `test/helpers/random-text.ts` | 固定シードの乱数と、`chunkText` の試験に使う乱数のテキスト（`chunk.test.ts`・`chunk-legacy.test.ts` で共用） |
+| `test/helpers/chunk-reconstruct.ts` | `chunkText` の出力から足したフェンスを取り除いて元の文字列に戻し、整合を確かめる（`chunk.test.ts`・`chunk-legacy.test.ts` で共用） |
 | `test/fixtures/chunk-legacy.ts` | 分割前の `chunkText` の実装。`chunk-legacy.test.ts` で出力が一致することを確かめる |
 | `tsconfig.json` | 本体（`src` / `scripts`）のビルドの設定 |
 | `tsconfig.test.json` | テストを含めた型検査用の設定（出力なし） |
