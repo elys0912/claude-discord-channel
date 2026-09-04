@@ -170,11 +170,9 @@ export class FakeDiscord implements AppBridge {
       const ts = this.record({ method: 'postText', channel, threadTs, text: long.content, files: [long.name] });
       return { ts: [ts], asFile: true };
     }
-    const ids: string[] = [];
-    for (const piece of chunkText(safe, TEXT_CHUNK_MAX)) {
-      ids.push(this.record({ method: 'postText', channel, threadTs, text: piece }));
-    }
-    return { ts: ids };
+    // 本物（DiscordBridge.postText）と同じく、分けた結果が空白だけになったチャンクは送らない
+    const pieces = chunkText(safe, TEXT_CHUNK_MAX).filter((piece) => piece.trim() !== '');
+    return { ts: pieces.map((piece) => this.record({ method: 'postText', channel, threadTs, text: piece })) };
   }
 
   async postCard(channel: string, card: Card, threadTs?: string): Promise<{ ts: string }> {
@@ -387,7 +385,7 @@ export class FakeDiscord implements AppBridge {
   }
 
   private record(call: Omit<Call, 'ts'>): string {
-    const error = call.method !== 'sendTyping' ? this.failPost?.(call.channel) : undefined;
+    const error = this.failPost?.(call.channel);
     if (error) throw error;
     this.seq += 1;
     const ts = String(this.seq);
