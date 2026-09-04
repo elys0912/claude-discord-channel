@@ -38,7 +38,8 @@ describe('TypingIndicator', () => {
     t.start('c', undefined);
     await vi.advanceTimersByTimeAsync(60_000);
     expect(t.size).toBe(0);
-    expect(calls.length).toBeLessThanOrEqual(5);
+    // 間隔 8,000ms・上限 30,000ms なので、0・8,000・16,000・24,000ms の 4 回で止まる（32,000ms の回は上限を過ぎている）
+    expect(calls).toHaveLength(4);
   });
 
   it('同じ返信先で始め直すと、上限の時間が延びて二重には出さない', async () => {

@@ -89,10 +89,15 @@ describe('Logger', () => {
     expect(content).toContain('should appear');
   });
 
-  it('ログ出力の例外を呼び出し元へ投げない', () => {
-    const logger = new Logger({ file, stderr: false });
-    // maxBytes に不正値を入れても例外を投げないことを確認（内部で吸収）
+  it('ログファイルに書けなくても、例外を呼び出し元へ投げない', () => {
+    // 親フォルダーの位置に普通のファイルを置き、書き込みが ENOTDIR で失敗する状態を作る
+    const blocker = path.join(dir, 'blocker');
+    fs.writeFileSync(blocker, '');
+    const unwritable = path.join(blocker, 'app.log');
+    const logger = new Logger({ file: unwritable, stderr: false });
+
     expect(() => logger.info('x')).not.toThrow();
+    expect(fs.existsSync(unwritable)).toBe(false);
   });
 });
 

@@ -22,7 +22,11 @@ describe('toLongReply', () => {
   it('冒頭がコードブロックの途中で切れたら閉じる', () => {
     const text = '```\n' + 'x\n'.repeat(4000) + '```';
     const content = toLongReply(text)?.content ?? '';
-    const fences = content.split('\n').filter((l) => l.startsWith('```')).length;
-    expect(fences % 2).toBe(0);
+    const head = content.slice(0, content.indexOf('\n…（全文'));
+    const fences = head.split('\n').filter((l) => l.startsWith('```'));
+
+    expect(head.startsWith('```\n')).toBe(true);
+    expect(head.endsWith('\n```')).toBe(true);
+    expect(fences).toHaveLength(2);
   });
 });
