@@ -8,9 +8,8 @@ import path from 'node:path';
 import { inputField } from './permission-core.js';
 import type { PermissionRequest } from './permission-core.js';
 
-// ルールの種別（シェル・パス・WebFetch・MCP）ごとの扱いは、SHELL_TOOLS・PATH_TOOLS・PATH_RULE_TOOLS と
-// deriveRule・isDerivableRule・parseRuleForCheck の 6 か所に分かれている。種別を足す・変えるときは 6 か所を併せて直す。
-// ask との照合（session-allow.ts の SHELL_TOOLS・PATH_RULE_TARGETS）も同じ対応を持つ
+// ルールの種別（シェル・パス・WebFetch・MCP）ごとの扱いは、このファイルと session-allow.ts（ask との照合）の複数の箇所に分かれている。
+// 各箇所の説明に「ルールの種別の対応箇所」と書いた。種別を足す・変えるときは、この語で検索して併せて直す（SHELL_TOOLS もその 1 つ）。
 const SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
 /** 保存済みのルールのツール名を大文字小文字を区別せずにシェルと判定するための、SHELL_TOOLS の小文字 */
 const SHELL_TOOLS_LOWER = new Set([...SHELL_TOOLS].map((tool) => tool.toLowerCase()));
@@ -29,7 +28,7 @@ interface PathToolSpec {
 /**
  * パスを取るツール。ツール全体ではなく、対象のフォルダー以下に絞ったルールにする。
  * Claude Code がパスで照合するのは Read(path) と Edit(path) だけなので、ルールはこの 2 つのどちらかで作る
- * （Edit のルールはファイルを書き換える組み込みツール全部に、Read のルールは Grep / Glob にも効く）
+ * （Edit のルールはファイルを書き換える組み込みツール全部に、Read のルールは Grep / Glob にも効く）。ルールの種別の対応箇所
  */
 const PATH_TOOLS: ReadonlyMap<string, PathToolSpec> = new Map([
   ['Read', { ruleTool: 'Read', field: 'file_path', isDir: false }],
@@ -40,7 +39,7 @@ const PATH_TOOLS: ReadonlyMap<string, PathToolSpec> = new Map([
   ['MultiEdit', { ruleTool: 'Edit', field: 'file_path', isDir: false }],
   ['NotebookEdit', { ruleTool: 'Edit', field: 'notebook_path', isDir: false }],
 ]);
-/** パスで照合されるルールのツール */
+/** パスで照合されるルールのツール。ルールの種別の対応箇所 */
 const PATH_RULE_TOOLS = new Set(['read', 'edit']);
 /** フォルダー以下全部を指すパスのルールの末尾 */
 const PATH_RULE_SUFFIX = '/**';
@@ -292,7 +291,7 @@ function deriveShellRule(req: PermissionRequest, tool: string): RuleResult {
  * - WebFetch: URL のホストに絞った `WebFetch(domain:example.com)`
  * - MCP の個別のツールで、名前から読み取り専用と分かるもの（isReadOnlyMcpTool）: ツール名だけのルール
  * - それ以外: 作らない
- * 作れないものは ok: false。deny との照合はここではしない（proposeRule）。
+ * 作れないものは ok: false。deny との照合はここではしない（proposeRule）。ルールの種別の対応箇所。
  */
 export function deriveRule(req: PermissionRequest, home: string = os.homedir()): RuleResult {
   const tool = req.tool_name.trim();
@@ -308,7 +307,7 @@ export function deriveRule(req: PermissionRequest, home: string = os.homedir()):
 /**
  * 保存済みのルール（allow-extra.json）が、今の方式（deriveRule）で作れる形か。
  * 前の方式で足したもの（`Bash(git log:*)`・`PowerShell(npm.cmd:*)`・ツール全体の `WebFetch`・書き込みを含む MCP のツールなど）は false。
- * 種別ごとの分岐は deriveRule と対応させる（SHELL_TOOLS の上のコメント）
+ * 種別ごとの分岐は deriveRule と対応させる。ルールの種別の対応箇所
  */
 export function isDerivableRule(rule: string, home: string = os.homedir()): boolean {
   const m = RULE_RE.exec(rule);
@@ -374,7 +373,7 @@ function parseRule(rule: string): ParsedRule | undefined {
 
 /**
  * 保存済みの候補（`Bash(git status)` / `WebFetch(domain:example.com)`）を denyOverlaps に渡せる形に戻す。
- * パスのルールの扱いは deriveRule と対応させる（SHELL_TOOLS の上のコメント）
+ * パスのルールの扱いは deriveRule と対応させる。ルールの種別の対応箇所
  */
 export function parseRuleForCheck(rule: string): { tool: string; prefix: string | undefined } | undefined {
   const parsed = parseRule(rule);

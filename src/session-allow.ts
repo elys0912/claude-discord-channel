@@ -11,8 +11,9 @@ import type { PermissionRequest } from './permission-core.js';
 import { COMMAND_SEPARATOR_RE, RULE_RE, denyDirOf, isSameOrAncestor, normalizeCommandName, toRulePath } from './allow-rules.js';
 import type { DenyContext } from './allow-rules.js';
 
+/** シェルのツール（小文字）。ルールの種別の対応箇所（allow-rules.ts の SHELL_TOOLS） */
 const SHELL_TOOLS = new Set(['bash', 'powershell']);
-/** パスのルール（Read / Edit）がどのツールに効くか（Claude Code の permission rule と同じ対応） */
+/** パスのルール（Read / Edit）がどのツールに効くか（Claude Code の permission rule と同じ対応）。ルールの種別の対応箇所 */
 const PATH_RULE_TARGETS: Record<string, readonly string[]> = {
   read: ['read', 'grep', 'glob'],
   edit: ['edit', 'write', 'multiedit', 'notebookedit'],
