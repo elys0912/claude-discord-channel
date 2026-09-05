@@ -7,8 +7,7 @@ import { KEEPALIVE_TEXT, REACTION } from '../src/app.js';
 import { HELP_TEXT, parseCommand } from '../src/commands.js';
 import { ACCESS, CH, DM1, STRANGER, cardText, componentIds, flush } from './helpers/fake-discord.js';
 import { fakeConsole } from './helpers/fake-console.js';
-import { channelMessages, closeHarness, sendBash, startHarness, verdicts } from './helpers/app-harness.js';
-import type { Harness } from './helpers/app-harness.js';
+import { channelMessages, sendBash, useHarness, verdicts } from './helpers/app-harness.js';
 import type { ConsoleKey } from '../src/console.js';
 
 describe('parseCommand', () => {
@@ -38,26 +37,26 @@ describe('ターミナル画面と許可リスト（!screen / 今後も許可 / 
     '  > Not now            Continue without browser tools',
     "    Don't ask again    Revisit anytime with /chrome",
   ].join('\n');
-  let h: Harness;
   let dir: string;
+  let denyFile: string;
   let sent: ConsoleKey[][];
 
-  beforeEach(async () => {
+  beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-rules-'));
-    const denyFile = path.join(dir, 'settings.json');
+    denyFile = path.join(dir, 'settings.json');
     fs.writeFileSync(denyFile, JSON.stringify({ permissions: { deny: ['Bash(pwd -P:*)'] } }));
     sent = [];
-    h = await startHarness({
-      console: fakeConsole({ screen: CHROME, keys: sent }),
-      allowExtraFile: path.join(dir, 'allow-extra.json'),
-      denyFiles: [denyFile],
-    });
   });
 
-  afterEach(async () => {
-    await closeHarness(h);
+  afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  const h = useHarness(() => ({
+    console: fakeConsole({ screen: CHROME, keys: sent }),
+    allowExtraFile: path.join(dir, 'allow-extra.json'),
+    denyFiles: [denyFile],
+  }));
 
   it('!screen は Claude に渡さず、選択肢のメニューを出し、選ぶと選択キーを送る', async () => {
     await h.discord.dm('!screen', { id: '5000' });
@@ -128,34 +127,36 @@ describe('ターミナル画面と許可リスト（!screen / 今後も許可 / 
 
 describe('!status / !restart / !compact / !clear / !stop / !help', () => {
   const PROMPT = ['Claude: done.', '', '❯ ', '  ? for shortcuts'].join('\n');
-  let h: Harness;
   let dir: string;
   let flag: string;
   let screen: string;
   let commands: string[];
   let keys: ConsoleKey[][];
   let killed: number;
-  const texts = () => h.discord.texts();
 
-  beforeEach(async () => {
+  beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-session-'));
     flag = path.join(dir, 'restart.flag');
     screen = PROMPT;
     commands = [];
     keys = [];
     killed = 0;
-    h = await startHarness({
-      console: fakeConsole({ screen: () => screen, keys, commands }),
-      restartFlagFile: flag,
-      killParent: () => void killed++,
-      workDir: 'C:\\dev\\app',
-    });
-    h.discord.clear();
   });
 
-  afterEach(async () => {
-    await closeHarness(h);
+  afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const h = useHarness(() => ({
+    console: fakeConsole({ screen: () => screen, keys, commands }),
+    restartFlagFile: flag,
+    killParent: () => void killed++,
+    workDir: 'C:\\dev\\app',
+  }));
+  const texts = () => h.discord.texts();
+
+  beforeEach(() => {
+    h.discord.clear();
   });
 
   it('!status は Claude に渡さず、稼働状態を返す（受け取った印の 👀 は付ける）', async () => {
@@ -256,8 +257,9 @@ describe('!status / !restart / !compact / !clear / !stop / !help', () => {
 });
 
 describe('コンソールや再起動の印が無いブリッジ', () => {
+  const h = useHarness();
+
   it('!restart / !stop / !rules は使えない旨を返し、!screen は画面を読めない旨を返す', async () => {
-    const h = await startHarness();
     for (const c of ['!restart', '!stop', '!rules', '!screen']) await h.discord.dm(c);
     await flush();
     expect(h.discord.texts()).toEqual([
@@ -266,50 +268,58 @@ describe('コンソールや再起動の印が無いブリッジ', () => {
       '⚠️ このブリッジでは !rules を使えない',
       expect.stringContaining('画面を読めない'),
     ]);
-    await closeHarness(h);
   });
 });
 
 describe('キャッシュのつなぎ止め', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-keepalive-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const h = useHarness(() => ({
+    hookInboxFile: path.join(dir, 'hooks.jsonl'),
+    keepalive: { enabled: true, afterMs: 55 * 60_000, max: 6, quiet: undefined },
+  }));
+
   it('!keepalive で状態を見て、off / on で切り替える', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-keepalive-'));
-    const h = await startHarness({
-      hookInboxFile: path.join(dir, 'hooks.jsonl'),
-      keepalive: { enabled: true, afterMs: 55 * 60_000, max: 6, quiet: undefined },
-    });
-    try {
-      await h.discord.dm('!keepalive');
-      await h.discord.dm('!keepalive off');
-      await h.discord.dm('!keepalive on');
-      await flush();
-      const texts = h.discord.texts();
-      expect(texts[0]).toContain('有効');
-      expect(texts[1]).toContain('無効');
-      expect(texts[2]).toContain('有効');
-      expect(channelMessages(h)).toEqual([]);
-      expect(KEEPALIVE_TEXT).toContain('ok とだけ書く');
-    } finally {
-      await closeHarness(h);
-      fs.rmSync(dir, { recursive: true, force: true });
-    }
+    await h.discord.dm('!keepalive');
+    await h.discord.dm('!keepalive off');
+    await h.discord.dm('!keepalive on');
+    await flush();
+    const texts = h.discord.texts();
+    expect(texts[0]).toContain('有効');
+    expect(texts[1]).toContain('無効');
+    expect(texts[2]).toContain('有効');
+    expect(channelMessages(h)).toEqual([]);
+    expect(KEEPALIVE_TEXT).toContain('ok とだけ書く');
   });
 });
 
 describe('スラッシュコマンド', () => {
-  let h: Harness;
+  let dir: string;
   let commands: string[];
 
-  beforeEach(async () => {
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-slash-'));
     commands = [];
-    h = await startHarness({
-      access: { ...ACCESS, channels: [CH] },
-      console: fakeConsole({ screen: '❯ ', commands }),
-      restartFlagFile: path.join(os.tmpdir(), `slash-${Math.random().toString(36).slice(2)}.flag`),
-      workDir: 'C:\\dev\\app',
-    });
   });
 
-  afterEach(() => closeHarness(h));
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const h = useHarness(() => ({
+    access: { ...ACCESS, channels: [CH] },
+    console: fakeConsole({ screen: '❯ ', commands }),
+    restartFlagFile: path.join(dir, 'restart.flag'),
+    workDir: 'C:\\dev\\app',
+  }));
 
   it('/status は使ったことを一言残し、その一言への返信として状態を返す（Claude には渡さない）', async () => {
     await h.discord.slash('status');
