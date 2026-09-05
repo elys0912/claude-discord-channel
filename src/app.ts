@@ -447,43 +447,27 @@ export async function handleAction(wiring: Wiring, parsed: ActionParse, ctx: Act
       await wiring.relay.answerByButton({ requestId: parsed.requestId, behavior: 'allow' }, byUserId, pressed);
       return;
 
+    // ここから下は結果の書き換え先・投稿先が要るので、チャンネルが分からなければ何もしない
     case 'screen_show':
-    case 'screen_pick':
-    case 'rule_confirm':
-    case 'rule_remove':
-    case 'file_confirm':
-      // 結果の書き換え先・投稿先が要るので、チャンネルが分からなければ何もしない
-      if (at) await handlePressedAt(wiring, parsed, at, byUserId);
+      if (at) await wiring.screen.show(at.channel, at.threadTs);
       return;
 
-    default:
-      assertNever(parsed);
-  }
-}
-
-/** 押されたメッセージの位置が分かっているときだけ扱うボタン（画面の確認・選択、許可ルール、ファイル送信の確認） */
-async function handlePressedAt(
-  { screen, rules, files }: Wiring,
-  parsed: Extract<ActionParse, { kind: 'screen_show' | 'screen_pick' | 'rule_confirm' | 'rule_remove' | 'file_confirm' }>,
-  at: PressedMessage,
-  byUserId: string
-): Promise<void> {
-  switch (parsed.kind) {
-    case 'screen_show':
-      await screen.show(at.channel, at.threadTs);
-      return;
     case 'screen_pick':
-      await screen.pick(parsed.snapshotId, parsed.index, at, byUserId);
+      if (at) await wiring.screen.pick(parsed.snapshotId, parsed.index, at, byUserId);
       return;
+
     case 'rule_confirm':
-      await rules?.confirm(parsed.proposalId, parsed.accept, at, byUserId);
+      if (at) await wiring.rules?.confirm(parsed.proposalId, parsed.accept, at, byUserId);
       return;
+
     case 'rule_remove':
-      await rules?.remove(parsed.listId, parsed.index, at, byUserId);
+      if (at) await wiring.rules?.remove(parsed.listId, parsed.index, at, byUserId);
       return;
+
     case 'file_confirm':
-      await files?.confirm(parsed.confirmId, parsed.accept, at, byUserId);
+      if (at) await wiring.files?.confirm(parsed.confirmId, parsed.accept, at, byUserId);
       return;
+
     default:
       assertNever(parsed);
   }
