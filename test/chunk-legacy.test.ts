@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest';
 import { chunkText, splitPieces } from '../src/chunk.js';
 import { chunkText as chunkTextLegacy } from './fixtures/chunk-legacy.js';
-import { fenceStateAfter, reconstruct } from './helpers/chunk-reconstruct.js';
+import { fenceStateAfter, reconstructAndCheck } from './helpers/chunk-reconstruct.js';
 import { mulberry32, randomText } from './helpers/random-text.js';
 
 describe('chunkText は分割前の実装と同じ出力を返す', () => {
@@ -56,7 +56,7 @@ describe('chunkText の不変条件', () => {
         expect(chunks).toEqual([]);
         continue;
       }
-      expect(reconstruct(chunks, limit), `case #${i} limit=${limit} text=${JSON.stringify(text)}`).toBe(text);
+      expect(reconstructAndCheck(chunks, limit), `case #${i} limit=${limit} text=${JSON.stringify(text)}`).toBe(text);
     }
   });
 

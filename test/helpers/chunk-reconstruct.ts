@@ -17,7 +17,7 @@ export function fenceStateAfter(initial: string | undefined, content: string): s
 }
 
 /** チャンク列から、開き直し／閉じ直しを取り除いて元の文字列を復元しつつ、prefix/suffix の整合を検証する */
-export function reconstruct(chunks: string[], limit: number): string {
+export function reconstructAndCheck(chunks: string[], limit: number): string {
   let open: string | undefined = undefined;
   let out = '';
   chunks.forEach((chunk, i) => {

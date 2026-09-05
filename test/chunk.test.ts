@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { chunkText } from '../src/chunk.js';
-import { reconstruct } from './helpers/chunk-reconstruct.js';
+import { reconstructAndCheck } from './helpers/chunk-reconstruct.js';
 import { mulberry32, randomText } from './helpers/random-text.js';
 
 describe('chunkText の基本', () => {
@@ -69,8 +69,8 @@ describe('chunkText のコードブロック', () => {
     const limit = 64;
     const chunks = chunkText(text, limit);
     expect(chunks.length).toBeGreaterThan(1);
-    // reconstruct は、各チャンクが limit 以内であることと、開き直しが ```js\n で始まることも確かめる
-    expect(reconstruct(chunks, limit)).toBe(text);
+    // reconstructAndCheck は、各チャンクが limit 以内であることと、開き直しが ```js\n で始まることも確かめる
+    expect(reconstructAndCheck(chunks, limit)).toBe(text);
   });
 
   it('最後のチャンクの閉じていないフェンスはそのままにする', () => {
