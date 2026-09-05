@@ -93,39 +93,47 @@ export function sameCommands(registered: readonly unknown[], wanted: readonly Ap
   return a.length === b.length && a.every((s, i) => s === b[i]);
 }
 
-/** Discord から読んだ JSON の値をオブジェクトとして扱う（オブジェクトでなければ項目の無いものとみなす） */
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : {};
+/** Discord が返す登録済みのコマンドのうち、比べる項目 */
+interface RegisteredCommand {
+  type?: number;
+  name?: string;
+  description?: string;
+  options?: RegisteredOption[];
+  contexts?: number[];
 }
 
-function asArray(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
+interface RegisteredOption {
+  type: number;
+  name: string;
+  description: string;
+  required?: boolean;
+  choices?: { name: string; value: unknown }[];
 }
 
-/** 登録済みかを比べるための、コマンドを正規化した形 */
+/**
+ * 登録済みかを比べるための、コマンドを正規化した形。
+ * 形は確かめずに読む。壊れた値（null の要素・配列でない options など）なら TypeError になり、
+ * 呼び出し側（discord.ts）の catch が登録の失敗として扱って、登録し直さない
+ */
 function commandShape(command: unknown): string {
-  const c = asRecord(command);
+  const c = command as RegisteredCommand;
   return JSON.stringify({
     type: c.type ?? ApplicationCommandType.ChatInput,
     name: c.name,
     // 右クリックメニューの説明は、Discord が空文字で返す
     description: c.description ?? '',
-    options: asArray(c.options).map(optionShape),
-    contexts: [...asArray(c.contexts)].sort(),
+    options: (c.options ?? []).map(optionShape),
+    contexts: [...(c.contexts ?? [])].sort(),
   });
 }
 
 /** 引数を正規化した形（省略された required と choices は既定の値にそろえる） */
-function optionShape(option: unknown): Record<string, unknown> {
-  const o = asRecord(option);
+function optionShape(option: RegisteredOption): Record<string, unknown> {
   return {
-    type: o.type,
-    name: o.name,
-    description: o.description,
-    required: o.required ?? false,
-    choices: asArray(o.choices).map((choice) => {
-      const ch = asRecord(choice);
-      return [ch.name, ch.value];
-    }),
+    type: option.type,
+    name: option.name,
+    description: option.description,
+    required: option.required ?? false,
+    choices: (option.choices ?? []).map((choice) => [choice.name, choice.value]),
   };
 }
