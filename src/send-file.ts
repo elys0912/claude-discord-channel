@@ -94,7 +94,6 @@ export function secretReason(file: string): string | undefined {
   return undefined;
 }
 
-/** 利用者に見せるファイル名の並び */
 function fileNames(files: readonly CheckedFile[]): string {
   return files.map((f) => f.name).join(', ');
 }
