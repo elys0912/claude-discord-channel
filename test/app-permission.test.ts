@@ -1,10 +1,10 @@
-// 実行許可まわりの設定（保存済みのルールの知らせ・このセッション中は全部許可）のテスト。
+// 実行許可まわりの設定（保存済みのルールの知らせ・今後も許可・このセッション中は全部許可）のテスト。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cardText, componentIds, flush } from './helpers/fake-discord.js';
-import { closeHarness, sendBash, startHarness, verdicts } from './helpers/app-harness.js';
+import { closeHarness, sendBash, startHarness, useHarness, verdicts } from './helpers/app-harness.js';
 import type { Harness } from './helpers/app-harness.js';
 
 describe('起動時の、今の方式では作れない保存済みのルールの知らせ（D-SD-03）', () => {
@@ -43,6 +43,58 @@ describe('起動時の、今の方式では作れない保存済みのルール�
     h = await startHarness({ allowExtraFile: file });
     await flush();
     expect(notices()).toEqual([]);
+  });
+});
+
+describe('今後も許可（allow-extra.json への追記と、deny との突き合わせ）', () => {
+  let dir: string;
+  let denyFile: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-always-'));
+    denyFile = path.join(dir, 'settings.json');
+    fs.writeFileSync(denyFile, JSON.stringify({ permissions: { deny: ['Bash(pwd -P:*)'] } }));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const h = useHarness(() => ({
+    allowExtraFile: path.join(dir, 'allow-extra.json'),
+    denyFiles: [denyFile],
+  }));
+
+  it('今後も許可: 今回は許可し、確認のうえ allow-extra.json に書き込む', async () => {
+    await sendBash(h.client, 'git status');
+    const posted = h.discord.of('postCard')[0]?.ts;
+    h.discord.clear();
+
+    await h.discord.press('perm:always:abcde', { message: posted });
+    await flush();
+
+    expect(verdicts(h)).toEqual([{ request_id: 'abcde', behavior: 'allow' }]);
+    const proposal = h.discord.of('postCard').find((c) => cardText(c.card).includes('Bash(git status)'));
+    const add = componentIds(proposal?.card).find((id) => id.startsWith('rule:add:'));
+    expect(add).toBeDefined();
+
+    await h.discord.press(add ?? '', { message: proposal?.ts });
+    await flush();
+    expect(JSON.parse(fs.readFileSync(path.join(dir, 'allow-extra.json'), 'utf8'))).toEqual({ allow: ['Bash(git status)'] });
+  });
+
+  it('今後も許可: deny に当たるなら、今回は許可したうえで追加しない旨と当たった deny を知らせる', async () => {
+    // 候補は Bash(pwd)。deny の Bash(pwd -P:*) と範囲が重なる
+    await sendBash(h.client, 'pwd');
+    h.discord.clear();
+
+    await h.discord.press('perm:always:abcde');
+    await flush();
+
+    expect(verdicts(h)).toEqual([{ request_id: 'abcde', behavior: 'allow' }]);
+    const notice = h.discord.texts().find((t) => t.includes('deny に当たる'));
+    expect(notice).toContain('Bash(pwd -P:*)');
+    expect(fs.existsSync(path.join(dir, 'allow-extra.json'))).toBe(false);
   });
 });
 

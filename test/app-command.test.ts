@@ -1,13 +1,13 @@
-// ブリッジのコマンド（! で始まる発言・スラッシュコマンド）と、ターミナル画面・許可リストの操作のテスト。
+// ブリッジのコマンド（! で始まる発言・スラッシュコマンド）と、ターミナル画面・許可リストの操作（!screen・!rules）のテスト。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { KEEPALIVE_TEXT, REACTION } from '../src/app.js';
 import { HELP_TEXT, parseCommand } from '../src/commands.js';
-import { ACCESS, CH, DM1, STRANGER, cardText, componentIds, flush } from './helpers/fake-discord.js';
+import { ACCESS, CH, DM1, STRANGER, cardText, flush } from './helpers/fake-discord.js';
 import { fakeConsole } from './helpers/fake-console.js';
-import { channelMessages, sendBash, useHarness, verdicts } from './helpers/app-harness.js';
+import { channelMessages, useHarness } from './helpers/app-harness.js';
 import type { ConsoleKey } from '../src/console.js';
 
 describe('parseCommand', () => {
@@ -43,7 +43,7 @@ describe('KEEPALIVE_TEXT（つなぎ止めで Claude に送る定型文）', () 
   });
 });
 
-describe('ターミナル画面と許可リスト（!screen / 今後も許可 / !rules）', () => {
+describe('ターミナル画面と許可リスト（!screen / !rules）', () => {
   const CHROME = [
     ' Claude wants to use your browser',
     '    Install extension  Opens the install page in Chrome',
@@ -51,13 +51,10 @@ describe('ターミナル画面と許可リスト（!screen / 今後も許可 / 
     "    Don't ask again    Revisit anytime with /chrome",
   ].join('\n');
   let dir: string;
-  let denyFile: string;
   let sent: ConsoleKey[][];
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-rules-'));
-    denyFile = path.join(dir, 'settings.json');
-    fs.writeFileSync(denyFile, JSON.stringify({ permissions: { deny: ['Bash(pwd -P:*)'] } }));
     sent = [];
   });
 
@@ -68,7 +65,6 @@ describe('ターミナル画面と許可リスト（!screen / 今後も許可 / 
   const h = useHarness(() => ({
     console: fakeConsole({ screen: CHROME, keys: sent }),
     allowExtraFile: path.join(dir, 'allow-extra.json'),
-    denyFiles: [denyFile],
   }));
 
   it('!screen は Claude に渡さず、選択肢のメニューを出し、選ぶと選択キーを送る', async () => {
@@ -91,38 +87,6 @@ describe('ターミナル画面と許可リスト（!screen / 今後も許可 / 
     await h.discord.press('scr:show', { message: '5100' });
     await flush();
     expect(h.discord.of('postCard')[0]).toMatchObject({ channel: DM1, threadTs: '5100' });
-  });
-
-  it('今後も許可: 今回は許可し、確認のうえ allow-extra.json に書き込む', async () => {
-    await sendBash(h.client, 'git status');
-    const posted = h.discord.of('postCard')[0]?.ts;
-    h.discord.clear();
-
-    await h.discord.press('perm:always:abcde', { message: posted });
-    await flush();
-
-    expect(verdicts(h)).toEqual([{ request_id: 'abcde', behavior: 'allow' }]);
-    const proposal = h.discord.of('postCard').find((c) => cardText(c.card).includes('Bash(git status)'));
-    const add = componentIds(proposal?.card).find((id) => id.startsWith('rule:add:'));
-    expect(add).toBeDefined();
-
-    await h.discord.press(add ?? '', { message: proposal?.ts });
-    await flush();
-    expect(JSON.parse(fs.readFileSync(path.join(dir, 'allow-extra.json'), 'utf8'))).toEqual({ allow: ['Bash(git status)'] });
-  });
-
-  it('今後も許可: deny に当たるなら、今回は許可したうえで追加しない旨と当たった deny を知らせる', async () => {
-    // 候補は Bash(pwd)。deny の Bash(pwd -P:*) と範囲が重なる
-    await sendBash(h.client, 'pwd');
-    h.discord.clear();
-
-    await h.discord.press('perm:always:abcde');
-    await flush();
-
-    expect(verdicts(h)).toEqual([{ request_id: 'abcde', behavior: 'allow' }]);
-    const notice = h.discord.texts().find((t) => t.includes('deny に当たる'));
-    expect(notice).toContain('Bash(pwd -P:*)');
-    expect(fs.existsSync(path.join(dir, 'allow-extra.json'))).toBe(false);
   });
 
   it('!rules で追加分を一覧し、メニューで選ぶと消せる', async () => {
