@@ -3,11 +3,62 @@ import { ChannelType, Collection, Events, MessageFlags, MessageType } from 'disc
 import type { Channel, Message } from 'discord.js';
 import { DiscordBridge, TEXT_CHUNK_MAX, embedText, interactionConversation, normalizeBotRoleMentions, toInbound } from '../src/discord.js';
 import { threadName } from '../src/discord-targets.js';
+import type { ParsedAccess } from '../src/config.js';
 import { Logger } from '../src/log.js';
 
 // 実在しない、形だけを合わせた ID（Discord の snowflake と同じ 19 桁）
 const BOT = '1400000000000000001';
 const ROLE = '1400000000000000002';
+// 実在しない、形だけを合わせた ID（makeBridge の既定のサーバーと許可ユーザー）
+const GUILD_ID = '100000000000000001';
+const USER_ID = '200000000000000001';
+
+/**
+ * テストから直接触る DiscordBridge の内部。Gateway につながずに受信の列・ボタン・送り先を試すため、private を覗く。
+ * 本体の private の名前に頼るのはここ 1 か所にまとめ、名前が変わったときに直す場所を 1 つにする
+ */
+interface BridgeInternals {
+  bindListeners: () => void;
+  connected: boolean;
+  botUserId: string;
+  allowedConversations: Set<string>;
+  dmChannels: Map<string, string>;
+  inbound: Promise<void>;
+  enqueue: (task: () => Promise<void>) => void;
+  handleInteraction: (interaction: unknown) => Promise<void>;
+  targets: { rememberLocation: (messageId: string, channelId: string) => void };
+  client: {
+    emit: (event: string, ...args: unknown[]) => boolean;
+    channels: { fetch: (id: string) => Promise<unknown> };
+  };
+}
+
+function internals(bridge: DiscordBridge): BridgeInternals {
+  return bridge as unknown as BridgeInternals;
+}
+
+/** init() で許可ユーザーの DM を開いたときと同じ状態にする */
+function openDm(bridge: DiscordBridge, user: string, dmChannel: string): void {
+  internals(bridge).dmChannels.set(user, dmChannel);
+  internals(bridge).allowedConversations.add(dmChannel);
+}
+
+/** Gateway につながない DiscordBridge。サーバーは GUILD_ID、許可ユーザーは USER_ID */
+function makeBridge(opts: { channels?: string[]; longReplyChars?: number; fetch?: typeof fetch } = {}): DiscordBridge {
+  const access: ParsedAccess = { guildId: GUILD_ID, allowFrom: [USER_ID], ...(opts.channels ? { channels: opts.channels } : {}) };
+  return new DiscordBridge({
+    token: 'unused',
+    access,
+    logger: new Logger({ stderr: false }),
+    longReplyChars: opts.longReplyChars,
+    ...(opts.fetch ? { fetch: opts.fetch } : {}),
+  });
+}
+
+/** client.channels.fetch を、channels の表から偽のチャンネルを返す形に差し替える（表に無ければ null） */
+function serveChannels(bridge: DiscordBridge, channels: Record<string, unknown>): void {
+  internals(bridge).client.channels.fetch = async (id: string) => channels[id] ?? null;
+}
 
 describe('normalizeBotRoleMentions', () => {
   it('ボットのロールへのメンションを、ボット本人へのメンションに置き換える（何か所あっても）', () => {
@@ -107,16 +158,11 @@ describe('threadName', () => {
 describe('DiscordBridge の回復できない切断', () => {
   function setup() {
     const lost: string[] = [];
-    const bridge = new DiscordBridge({
-      token: 'unused',
-      access: { guildId: '100000000000000001', allowFrom: ['200000000000000001'] },
-      logger: new Logger({ stderr: false }),
-    });
-    const internals = bridge as unknown as { bindListeners: () => void; connected: boolean; client: { emit: (event: string, ...args: unknown[]) => boolean } };
-    internals.bindListeners();
-    internals.connected = true;
+    const bridge = makeBridge();
+    internals(bridge).bindListeners();
+    internals(bridge).connected = true;
     void bridge.start({ onMessage: () => undefined, onAction: () => undefined, onGatewayLost: (detail) => void lost.push(detail) });
-    return { bridge, lost, client: internals.client };
+    return { bridge, lost, client: internals(bridge).client };
   }
 
   it('再接続しない切断（ShardDisconnect）は、つながっていない状態にして close code を知らせる', () => {
@@ -135,10 +181,7 @@ describe('DiscordBridge の回復できない切断', () => {
 
 describe('DiscordBridge.fetchFile', () => {
   function bridgeWith(fetched: string[]): DiscordBridge {
-    return new DiscordBridge({
-      token: 'unused',
-      access: { guildId: '100000000000000001', allowFrom: ['200000000000000001'] },
-      logger: new Logger({ stderr: false }),
+    return makeBridge({
       fetch: async (input) => {
         fetched.push(input instanceof URL ? input.href : JSON.stringify(input));
         return new Response('ok');
@@ -189,13 +232,8 @@ describe('DiscordBridge の送り先（フォーラムとスレッド）', () =>
       [POST]: thread(POST, FORUM),
       [OTHER_POST]: thread(OTHER_POST, '599999999999999999'),
     };
-    const bridge = new DiscordBridge({
-      token: 'unused',
-      access: { guildId: '100000000000000001', allowFrom: ['200000000000000001'], channels: [FORUM] },
-      logger: new Logger({ stderr: false }),
-    });
-    const client = (bridge as unknown as { client: { channels: { fetch: (id: string) => Promise<unknown> } } }).client;
-    client.channels.fetch = async (id: string) => channels[id] ?? null;
+    const bridge = makeBridge({ channels: [FORUM] });
+    serveChannels(bridge, channels);
     return { bridge, sent };
   }
 
@@ -215,8 +253,6 @@ describe('DiscordBridge の送り先（フォーラムとスレッド）', () =>
 
 describe('DiscordBridge の送信（長文の分割と途中の失敗）', () => {
   const CHANNEL = '500000000000000030';
-
-  const USER = '200000000000000001';
 
   type SendOptions = { content?: string | undefined; files?: unknown[] | undefined; reply?: unknown };
 
@@ -238,19 +274,9 @@ describe('DiscordBridge の送信（長文の分割と途中の失敗）', () =>
         return { id: `m${sent.length}`, channelId: CHANNEL };
       },
     };
-    const bridge = new DiscordBridge({
-      token: 'unused',
-      access: { guildId: '100000000000000001', allowFrom: [USER], channels: opts.dm ? [] : [CHANNEL] },
-      logger: new Logger({ stderr: false }),
-      longReplyChars: opts.longReplyChars ?? 0,
-    });
-    const client = (bridge as unknown as { client: { channels: { fetch: (id: string) => Promise<unknown> } } }).client;
-    client.channels.fetch = async (id: string) => (id === CHANNEL ? channel : null);
-    if (opts.dm) {
-      const internals = bridge as unknown as { dmChannels: Map<string, string>; allowedConversations: Set<string> };
-      internals.dmChannels.set(USER, CHANNEL);
-      internals.allowedConversations.add(CHANNEL);
-    }
+    const bridge = makeBridge({ channels: opts.dm ? [] : [CHANNEL], longReplyChars: opts.longReplyChars ?? 0 });
+    serveChannels(bridge, { [CHANNEL]: channel });
+    if (opts.dm) openDm(bridge, USER_ID, CHANNEL);
     return { bridge, sent };
   }
 
@@ -309,28 +335,17 @@ describe('DiscordBridge の送信（長文の分割と途中の失敗）', () =>
 });
 
 describe('DiscordBridge のボタン操作と受信の列', () => {
-  const USER = '200000000000000001';
+  const USER = USER_ID;
   const CHANNEL = '500000000000000060';
   const THREAD = '600000000000000061';
 
   function setup() {
     const actions: { parsed: unknown; ctx: unknown }[] = [];
-    const bridge = new DiscordBridge({
-      token: 'unused',
-      access: { guildId: '100000000000000001', allowFrom: [USER], channels: [CHANNEL] },
-      logger: new Logger({ stderr: false }),
-    });
-    const internals = bridge as unknown as {
-      botUserId: string;
-      allowedConversations: Set<string>;
-      handleInteraction: (interaction: unknown) => Promise<void>;
-      enqueue: (task: () => Promise<void>) => void;
-      inbound: Promise<void>;
-    };
-    internals.botUserId = BOT;
-    internals.allowedConversations.add(CHANNEL);
+    const bridge = makeBridge({ channels: [CHANNEL] });
+    internals(bridge).botUserId = BOT;
+    internals(bridge).allowedConversations.add(CHANNEL);
     void bridge.start({ onMessage: () => undefined, onAction: (parsed, ctx) => void actions.push({ parsed, ctx }) });
-    return { actions, internals };
+    return { actions, internals: internals(bridge) };
   }
 
   /** スレッドの中のボタン操作。author は押されたメッセージを投稿した人 */
@@ -341,7 +356,7 @@ describe('DiscordBridge のボタン操作と受信の列', () => {
       channel: { id: THREAD, type: ChannelType.PublicThread, parentId: CHANNEL },
       message: { id: '800000000000000062', author: { id: author } },
       customId: 'perm:allow:abcde',
-      guildId: '100000000000000001',
+      guildId: GUILD_ID,
       user: { id: USER },
     };
   }
@@ -381,8 +396,8 @@ describe('DiscordBridge のボタン操作と受信の列', () => {
 });
 
 describe('DiscordBridge のスラッシュコマンドと右クリックメニューの受け付け', () => {
-  const GUILD = '100000000000000001';
-  const USER = '200000000000000001';
+  const GUILD = GUILD_ID;
+  const USER = USER_ID;
   const STRANGER = '200000000000000099';
   const CHANNEL = '500000000000000070';
   const OTHER_CHANNEL = '500000000000000079';
@@ -397,21 +412,11 @@ describe('DiscordBridge のスラッシュコマンドと右クリックメニ�
   function setup() {
     const commands: { command: unknown; ctx: unknown }[] = [];
     const messages: { result: unknown; raw: unknown }[] = [];
-    const bridge = new DiscordBridge({
-      token: 'unused',
-      access: { guildId: GUILD, allowFrom: [USER], channels: [CHANNEL] },
-      logger: new Logger({ stderr: false }),
-    });
-    const internals = bridge as unknown as {
-      botUserId: string;
-      allowedConversations: Set<string>;
-      bindListeners: () => void;
-      inbound: Promise<void>;
-      client: { emit: (event: string, ...args: unknown[]) => boolean };
-    };
-    internals.botUserId = BOT;
-    internals.allowedConversations.add(CHANNEL);
-    internals.bindListeners();
+    const bridge = makeBridge({ channels: [CHANNEL] });
+    const inner = internals(bridge);
+    inner.botUserId = BOT;
+    inner.allowedConversations.add(CHANNEL);
+    inner.bindListeners();
     void bridge.start({
       onMessage: (result, raw) => void messages.push({ result, raw }),
       onAction: () => undefined,
@@ -420,11 +425,11 @@ describe('DiscordBridge のスラッシュコマンドと右クリックメニ�
     /** 応答と受信の列が終わるまで待つ */
     const settle = async (): Promise<void> => {
       for (let i = 0; i < 5; i++) {
-        await internals.inbound;
+        await inner.inbound;
         await new Promise((r) => setImmediate(r));
       }
     };
-    return { commands, messages, client: internals.client, settle };
+    return { commands, messages, client: inner.client, settle };
   }
 
   /** 使われた場所。スレッドなら親を CHANNEL にする */
@@ -580,13 +585,8 @@ describe('DiscordBridge のスレッドを作れない返信先', () => {
         },
       },
     };
-    const bridge = new DiscordBridge({
-      token: 'unused',
-      access: { guildId: '100000000000000001', allowFrom: ['200000000000000001'], channels: [CHANNEL] },
-      logger: new Logger({ stderr: false }),
-    });
-    const client = (bridge as unknown as { client: { channels: { fetch: (id: string) => Promise<unknown> } } }).client;
-    client.channels.fetch = async (id: string) => {
+    const bridge = makeBridge({ channels: [CHANNEL] });
+    internals(bridge).client.channels.fetch = async (id: string) => {
       tried.push(`channels.fetch:${id}`);
       return id === CHANNEL ? channel : null;
     };
@@ -630,14 +630,9 @@ describe('DiscordBridge のメッセージの在りか（thread_id の検証）'
       [FOREIGN]: channel(FOREIGN, { thread: false }),
       [FOREIGN_THREAD]: channel(FOREIGN_THREAD, { thread: true, parentId: FOREIGN }),
     };
-    const bridge = new DiscordBridge({
-      token: 'unused',
-      access: { guildId: '100000000000000001', allowFrom: ['200000000000000001'], channels: [ALLOWED] },
-      logger: new Logger({ stderr: false }),
-    });
-    const client = (bridge as unknown as { client: { channels: { fetch: (id: string) => Promise<unknown> } } }).client;
-    client.channels.fetch = async (id: string) => channels[id] ?? null;
-    return { bridge, touched, client, channels, channel };
+    const bridge = makeBridge({ channels: [ALLOWED] });
+    serveChannels(bridge, channels);
+    return { bridge, touched, client: internals(bridge).client, channels, channel };
   }
 
   it('react ツール用の addReactionOrThrow は失敗を投げ、受信時の印の addReaction は投げない', async () => {
@@ -670,10 +665,7 @@ describe('DiscordBridge のメッセージの在りか（thread_id の検証）'
     const DM = '500000000000000020';
     const { bridge, touched, client, channels, channel } = setup();
     channels[DM] = channel(DM, { thread: false });
-    // init() で DM を開いたときと同じ状態にする
-    const internals = bridge as unknown as { dmChannels: Map<string, string>; allowedConversations: Set<string> };
-    internals.dmChannels.set('200000000000000001', DM);
-    internals.allowedConversations.add(DM);
+    openDm(bridge, USER_ID, DM);
     const fetched: string[] = [];
     const original = client.channels.fetch;
     client.channels.fetch = async (id: string) => {
@@ -687,7 +679,7 @@ describe('DiscordBridge のメッセージの在りか（thread_id の検証）'
 
   it('在りかを覚えているメッセージは、thread_id によらず覚えた場所で操作する（D-DC-05）', async () => {
     const { bridge, touched } = setup();
-    (bridge as unknown as { targets: { rememberLocation: (messageId: string, channelId: string) => void } }).targets.rememberLocation(MESSAGE, THREAD);
+    internals(bridge).targets.rememberLocation(MESSAGE, THREAD);
     await bridge.addReaction(ALLOWED, MESSAGE, '👍', FOREIGN_THREAD);
     expect(touched).toEqual([{ channel: THREAD, op: 'react' }]);
   });
