@@ -22,6 +22,7 @@ import { ChannelServer } from '../src/mcp.js';
 import { PermissionRelay } from '../src/permission-relay.js';
 import { ACCESS, BOT, CH, DM1, DM2, FakeDiscord, STRANGER, USER1, cardText, componentIds, flush } from './helpers/fake-discord.js';
 import type { Call } from './helpers/fake-discord.js';
+import { fakeConsole } from './helpers/fake-console.js';
 import type { ParsedAccess } from '../src/config.js';
 import type { BridgeAppOptions } from '../src/app.js';
 import type { ConsoleKey } from '../src/console.js';
@@ -43,15 +44,18 @@ interface Harness {
 
 type Extra = Omit<BridgeAppOptions, 'bridge' | 'logger' | 'transport' | 'lock' | 'replyTimeoutMs'>;
 
-/** extra は、偽の Discord を使う設定（添付の取得など）のために、関数でも渡せる */
-async function startHarness(
-  access: ParsedAccess = ACCESS,
-  replyTimeoutMs?: number,
-  extraOrFn: Extra | ((discord: FakeDiscord) => Extra) = {}
-): Promise<Harness> {
+type HarnessOptions = Extra & {
+  /** 偽の Discord の許可設定（既定は ACCESS） */
+  access?: ParsedAccess;
+  replyTimeoutMs?: number;
+  /** 偽の Discord を使う設定（添付の取得など）。作った FakeDiscord を受け取って返す */
+  fromDiscord?: (discord: FakeDiscord) => Extra;
+};
+
+async function startHarness(options: HarnessOptions = {}): Promise<Harness> {
+  const { access = ACCESS, replyTimeoutMs, fromDiscord, ...extra } = options;
   const discord = new FakeDiscord(access);
   const logger = new Logger({ stderr: false });
-  const extra = typeof extraOrFn === 'function' ? extraOrFn(discord) : extraOrFn;
 
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: 'test-client', version: '0.0.1' }, { capabilities: {} });
@@ -74,10 +78,16 @@ async function startHarness(
     },
   };
 
-  const app = await startBridgeApp({ bridge: discord, logger, transport: serverTransport, lock, replyTimeoutMs, ...extra });
+  const app = await startBridgeApp({ bridge: discord, logger, transport: serverTransport, lock, replyTimeoutMs, ...extra, ...fromDiscord?.(discord) });
   await client.connect(clientTransport);
   harness.stop = app.stop;
   return harness;
+}
+
+/** MCP の client と、ブリッジ（startBridgeApp）を閉じる */
+async function closeHarness(h: Harness): Promise<void> {
+  await h.client.close();
+  await h.stop();
 }
 
 async function sendPermissionRequest(client: Client, requestId = 'abcde', inputPreview = '{"command":"ls"}'): Promise<void> {
@@ -134,10 +144,7 @@ describe('Discord → MCP', () => {
     h = await startHarness();
   });
 
-  afterEach(async () => {
-    await h.client.close();
-    await h.stop();
-  });
+  afterEach(() => closeHarness(h));
 
   it('DM が notifications/claude/channel として届き、その後 👀 リアクションと入力中の表示が付く', async () => {
     await h.discord.dm('hello', { id: '1001' });
@@ -351,10 +358,7 @@ describe('MCP → Discord', () => {
     h = await startHarness();
   });
 
-  afterEach(async () => {
-    await h.client.close();
-    await h.stop();
-  });
+  afterEach(() => closeHarness(h));
 
   it('reply は返信先を付けて送り、"sent (N message(s))" を返す', async () => {
     const res = await h.client.callTool({ name: 'reply', arguments: { chat_id: DM1, text: 'hi', thread_id: '1001' } });
@@ -539,8 +543,7 @@ describe('停止', () => {
   it('startBridgeApp は受信を 1 回だけ開始する', async () => {
     const h = await startHarness();
     expect(h.discord.started).toBe(1);
-    await h.client.close();
-    await h.stop();
+    await closeHarness(h);
     expect(h.discord.started).toBe(1);
   });
 });
@@ -810,13 +813,10 @@ describe('チャンネル（access.channels）', () => {
   let h: Harness;
 
   beforeEach(async () => {
-    h = await startHarness({ ...ACCESS, channels: [CH] });
+    h = await startHarness({ access: { ...ACCESS, channels: [CH] } });
   });
 
-  afterEach(async () => {
-    await h.client.close();
-    await h.stop();
-  });
+  afterEach(() => closeHarness(h));
 
   const delivered = () => channelMessages(h).map((x) => x.params?.content);
 
@@ -925,13 +925,10 @@ describe('無応答の見張り（replyTimeoutMs）', () => {
   const warnings = () => h.discord.of('postCard').filter((c) => cardText(c.card).includes('応答が無い'));
 
   beforeEach(async () => {
-    h = await startHarness(ACCESS, 60);
+    h = await startHarness({ replyTimeoutMs: 60 });
   });
 
-  afterEach(async () => {
-    await h.client.close();
-    await h.stop();
-  });
+  afterEach(() => closeHarness(h));
 
   it('Claude が何も返さないまま待ち時間を過ぎたら、その返信先に警告を投稿する', async () => {
     await h.discord.dm('hello', { id: '4000' });
@@ -989,8 +986,7 @@ describe('起動時の、今の方式では作れない保存済みのルール�
   });
 
   afterEach(async () => {
-    await h?.client.close();
-    await h?.stop();
+    if (h) await closeHarness(h);
     h = undefined;
     fs.rmSync(dir, { recursive: true, force: true });
   });
@@ -998,7 +994,7 @@ describe('起動時の、今の方式では作れない保存済みのルール�
   it('前の方式で足したルールがあれば、件数と一覧を知らせる。allow-extra.json は書き換えない', async () => {
     const saved = JSON.stringify({ allow: ['Bash(git status)', 'Bash(git log:*)', 'WebFetch'] });
     fs.writeFileSync(file, saved);
-    h = await startHarness(ACCESS, undefined, { allowExtraFile: file });
+    h = await startHarness({ allowExtraFile: file });
     await flush();
 
     const notice = notices()[0] ?? '';
@@ -1011,7 +1007,7 @@ describe('起動時の、今の方式では作れない保存済みのルール�
 
   it('作れないルールが無ければ知らせない', async () => {
     fs.writeFileSync(file, JSON.stringify({ allow: ['Bash(git status)'] }));
-    h = await startHarness(ACCESS, undefined, { allowExtraFile: file });
+    h = await startHarness({ allowExtraFile: file });
     await flush();
     expect(notices()).toEqual([]);
   });
@@ -1033,16 +1029,15 @@ describe('ターミナル画面と許可リスト（!screen / 今後も許可 / 
     const denyFile = path.join(dir, 'settings.json');
     fs.writeFileSync(denyFile, JSON.stringify({ permissions: { deny: ['Bash(pwd -P:*)'] } }));
     sent = [];
-    h = await startHarness(ACCESS, undefined, {
-      console: { read: async () => CHROME, sendKeys: async (keys) => void sent.push(keys), sendCommand: async () => undefined },
+    h = await startHarness({
+      console: fakeConsole({ screen: CHROME, keys: sent }),
       allowExtraFile: path.join(dir, 'allow-extra.json'),
       denyFiles: [denyFile],
     });
   });
 
   afterEach(async () => {
-    await h.client.close();
-    await h.stop();
+    await closeHarness(h);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
@@ -1131,8 +1126,8 @@ describe('!status / !restart / !compact / !clear / !stop / !help', () => {
     commands = [];
     keys = [];
     killed = 0;
-    h = await startHarness(ACCESS, undefined, {
-      console: { read: async () => screen, sendKeys: async (k) => void keys.push(k), sendCommand: async (c) => void commands.push(c) },
+    h = await startHarness({
+      console: fakeConsole({ screen: () => screen, keys, commands }),
       restartFlagFile: flag,
       killParent: () => void killed++,
       workDir: 'C:\\dev\\app',
@@ -1141,8 +1136,7 @@ describe('!status / !restart / !compact / !clear / !stop / !help', () => {
   });
 
   afterEach(async () => {
-    await h.client.close();
-    await h.stop();
+    await closeHarness(h);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
@@ -1254,8 +1248,7 @@ describe('コンソールや再起動の印が無いブリッジ', () => {
       '⚠️ このブリッジでは !rules を使えない',
       expect.stringContaining('画面を読めない'),
     ]);
-    await h.client.close();
-    await h.stop();
+    await closeHarness(h);
   });
 });
 
@@ -1284,16 +1277,15 @@ describe('hook の記録（hooks.jsonl）からの知らせ', () => {
   beforeEach(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-hooks-'));
     file = path.join(dir, 'hooks.jsonl');
-    h = await startHarness(ACCESS, undefined, {
+    h = await startHarness({
       hookInboxFile: file,
       hookPollMs: 20,
-      console: { read: async () => '', sendKeys: async () => undefined, sendCommand: async () => undefined },
+      console: fakeConsole(),
     });
   });
 
   afterEach(async () => {
-    await h.client.close();
-    await h.stop();
+    await closeHarness(h);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
@@ -1358,19 +1350,18 @@ describe('自分のセッションの hook だけ扱う（session_tag）と、!r
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-tag-'));
     file = path.join(dir, 'hooks.jsonl');
     flag = path.join(dir, 'restart.flag');
-    h = await startHarness(ACCESS, undefined, {
+    h = await startHarness({
       hookInboxFile: file,
       hookPollMs: 20,
       sessionTag: 'tag-mine',
       restartFlagFile: flag,
-      console: { read: async () => '❯ ', sendKeys: async () => undefined, sendCommand: async () => undefined },
+      console: fakeConsole({ screen: '❯ ' }),
     });
     h.discord.clear();
   });
 
   afterEach(async () => {
-    await h.client.close();
-    await h.stop();
+    await closeHarness(h);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
@@ -1425,7 +1416,7 @@ describe('このセッション中は全部許可', () => {
     const managedFile = path.join(dir, 'managed-settings.json');
     if (managed !== undefined) fs.writeFileSync(managedFile, managed);
     hooks = path.join(dir, 'hooks.jsonl');
-    h = await startHarness(ACCESS, undefined, {
+    h = await startHarness({
       denyFiles: [settings],
       managedSettingsFiles: () => [managedFile],
       sessionAllowAll,
@@ -1439,8 +1430,7 @@ describe('このセッション中は全部許可', () => {
   }
 
   afterEach(async () => {
-    await h.client.close();
-    await h.stop();
+    await closeHarness(h);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
@@ -1542,14 +1532,13 @@ describe('添付ファイル', () => {
   let dir: string;
 
   afterEach(async () => {
-    await h.client.close();
-    await h.stop();
+    await closeHarness(h);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
   it('テキストの添付は中身を本文に差し込んで渡し、inlined に名前を載せる', async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-inline-'));
-    h = await startHarness(ACCESS, undefined, (discord) => ({ inline: { bridge: discord, logger: new Logger({ stderr: false }) } }));
+    h = await startHarness({ fromDiscord: (discord) => ({ inline: { bridge: discord, logger: new Logger({ stderr: false }) } }) });
     h.discord.attachments.set('9100', { name: 'message.txt', body: '長い貼り付けの中身' });
 
     await h.discord.dm('', { files: [{ id: '9100', name: 'message.txt', mimetype: 'text/plain', size: 27 }] });
@@ -1562,7 +1551,9 @@ describe('添付ファイル', () => {
 
   it('DOWNLOAD_DIR があれば download_file で添付を保存できる', async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-download-'));
-    h = await startHarness(ACCESS, undefined, (discord) => ({ download: { info: (ref) => discord.attachmentInfo(ref), fetch: (file) => discord.fetchFile(file), dir } }));
+    h = await startHarness({
+      fromDiscord: (discord) => ({ download: { info: (ref) => discord.attachmentInfo(ref), fetch: (file) => discord.fetchFile(file), dir } }),
+    });
     h.discord.attachments.set('9200', { name: 'data.csv', body: 'a,b\n1,2\n' });
 
     const tools = await h.client.listTools();
@@ -1586,12 +1577,11 @@ describe('send_file', () => {
     fs.writeFileSync(path.join(share, 'report.txt'), 'report');
     outside = path.join(dir, 'outside.txt');
     fs.writeFileSync(outside, 'outside');
-    h = await startHarness(ACCESS, undefined, { upload: { dirs: [share] } });
+    h = await startHarness({ upload: { dirs: [share] } });
   });
 
   afterEach(async () => {
-    await h.client.close();
-    await h.stop();
+    await closeHarness(h);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
@@ -1630,7 +1620,7 @@ describe('send_file', () => {
 describe('キャッシュのつなぎ止め', () => {
   it('!keepalive で状態を見て、off / on で切り替える', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-keepalive-'));
-    const h = await startHarness(ACCESS, undefined, {
+    const h = await startHarness({
       hookInboxFile: path.join(dir, 'hooks.jsonl'),
       keepalive: { enabled: true, afterMs: 55 * 60_000, max: 6, quiet: undefined },
     });
@@ -1646,8 +1636,7 @@ describe('キャッシュのつなぎ止め', () => {
       expect(channelMessages(h)).toEqual([]);
       expect(KEEPALIVE_TEXT).toContain('ok とだけ書く');
     } finally {
-      await h.client.close();
-      await h.stop();
+      await closeHarness(h);
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -1659,17 +1648,15 @@ describe('スラッシュコマンド', () => {
 
   beforeEach(async () => {
     commands = [];
-    h = await startHarness({ ...ACCESS, channels: [CH] }, undefined, {
-      console: { read: async () => '❯ ', sendKeys: async () => undefined, sendCommand: async (c) => void commands.push(c) },
+    h = await startHarness({
+      access: { ...ACCESS, channels: [CH] },
+      console: fakeConsole({ screen: '❯ ', commands }),
       restartFlagFile: path.join(os.tmpdir(), `slash-${Math.random().toString(36).slice(2)}.flag`),
       workDir: 'C:\\dev\\app',
     });
   });
 
-  afterEach(async () => {
-    await h.client.close();
-    await h.stop();
-  });
+  afterEach(() => closeHarness(h));
 
   it('/status は使ったことを一言残し、その一言への返信として状態を返す（Claude には渡さない）', async () => {
     await h.discord.slash('status');
@@ -1715,13 +1702,10 @@ describe('TODO の進み具合（progress ツール）', () => {
   const progress = (items: { content: string; status: string }[], thread_id = '9500') =>
     h.client.callTool({ name: 'progress', arguments: { chat_id: DM1, thread_id, items } });
 
-  afterEach(async () => {
-    await h.client.close();
-    await h.stop();
-  });
+  afterEach(() => closeHarness(h));
 
   it('返信先に 1 枚出して以後は書き換え、次に話しかけられたら新しいカードにする', async () => {
-    h = await startHarness(ACCESS, undefined, { todoProgress: true });
+    h = await startHarness({ todoProgress: true });
     await h.discord.dm('作業して', { id: '9500' });
     await flush();
 
@@ -1748,7 +1732,7 @@ describe('TODO の進み具合（progress ツール）', () => {
   });
 
   it('状態が不正・空の一覧はツールのエラーにする', async () => {
-    h = await startHarness(ACCESS, undefined, { todoProgress: true });
+    h = await startHarness({ todoProgress: true });
     expect((await progress([{ content: 'a', status: 'done' }])).isError).toBe(true);
     expect((await progress([])).isError).toBe(true);
     expect(boards()).toEqual([]);
@@ -1765,13 +1749,10 @@ describe('右クリックメニュー（Claude に渡す）', () => {
   let h: Harness;
 
   beforeEach(async () => {
-    h = await startHarness({ ...ACCESS, channels: [CH] });
+    h = await startHarness({ access: { ...ACCESS, channels: [CH] } });
   });
 
-  afterEach(async () => {
-    await h.client.close();
-    await h.stop();
-  });
+  afterEach(() => closeHarness(h));
 
   it('ほかの人の発言を、転送の印を付けて Claude に渡し、渡した発言に 👀 を付ける。返信先は渡したことを残した一言', async () => {
     const target = h.discord.makeMessage('このエラーどう思う？', { kind: 'channel', user: STRANGER, id: '9700' });
@@ -1821,13 +1802,10 @@ describe('CI の通知（ciWebhooks）', () => {
   let h: Harness;
 
   beforeEach(async () => {
-    h = await startHarness({ ...ACCESS, channels: [CH], ciWebhooks: [HOOK] });
+    h = await startHarness({ access: { ...ACCESS, channels: [CH], ciWebhooks: [HOOK] } });
   });
 
-  afterEach(async () => {
-    await h.client.close();
-    await h.stop();
-  });
+  afterEach(() => closeHarness(h));
 
   it('登録した webhook の投稿を kind=ci で Claude に渡し、👀 を付け、返事はその投稿から作るスレッドに届く', async () => {
     const msg = { ...h.discord.makeMessage('', { kind: 'channel', id: '9900' }), authorId: HOOK, authorIsBot: true, webhookId: HOOK, embedText: 'CI #3 failed' };
@@ -1858,13 +1836,12 @@ describe('使用量の見張りと、想定外の終了からの起動し直し�
   it('起動時に crash.json があれば知らせて消す', async () => {
     const crashFile = path.join(dir, 'crash.json');
     fs.writeFileSync(crashFile, JSON.stringify({ at: Date.now(), exit_code: 1, count: 1, max: 3, window_min: 10, resumed: true }));
-    const h = await startHarness(ACCESS, undefined, { crashFile });
+    const h = await startHarness({ crashFile });
     try {
       expect(h.discord.texts().some((t) => t.includes('想定外に終了した（exit code 1）'))).toBe(true);
       expect(fs.existsSync(crashFile)).toBe(false);
     } finally {
-      await h.client.close();
-      await h.stop();
+      await closeHarness(h);
     }
   });
 
@@ -1872,7 +1849,7 @@ describe('使用量の見張りと、想定外の終了からの起動し直し�
     const file = path.join(dir, 'usage.json');
     const resetsAt = Math.floor(Date.now() / 1000) + 3600;
     fs.writeFileSync(file, JSON.stringify({ at: Date.now(), five_hour: { used: 85, resets_at: resetsAt } }));
-    const h = await startHarness(ACCESS, undefined, {
+    const h = await startHarness({
       usageWatch: { file, usageWarnPct: [80, 95], contextWarnPct: [70, 90], pollMs: 10 },
     });
     try {
@@ -1881,8 +1858,7 @@ describe('使用量の見張りと、想定外の終了からの起動し直し�
       await flush();
       expect(h.discord.texts().at(-1)).toContain('使用量: 5 時間枠 85%');
     } finally {
-      await h.client.close();
-      await h.stop();
+      await closeHarness(h);
     }
   });
 });
