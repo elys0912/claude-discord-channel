@@ -1,5 +1,5 @@
 // ブリッジ全体（startBridgeApp）の往復の統合テスト。受信・送信・停止・チャンネル・添付など。
-// コマンド・縮退モード・hook・実行許可の設定は app-command / app-degraded / app-hook / app-permission の各テストに分けた。
+// コマンド・縮退モード・記録（hook・使用量・想定外の終了）からの知らせ・実行許可の設定は app-command / app-degraded / app-notice / app-permission の各テストに分けた。
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
