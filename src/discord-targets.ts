@@ -33,7 +33,8 @@ function replyInChannel(channel: SendableChannels, messageId: string): SendTarge
   return { channel, replyTo: messageId };
 }
 
-export class TargetResolver {
+/** 送り先の解決と、そのために覚えておく場所（メッセージのあるチャンネル・ボットが関わったスレッド・スレッドを作れなかった返信先） */
+export class SendTargets {
   private readonly client: Client;
   private readonly logger: Logger;
   /** 許可ユーザーの DM のチャンネルか（DM の一覧は DiscordBridge が持つ） */

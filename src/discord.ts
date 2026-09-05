@@ -40,7 +40,7 @@ import type { PresenceState } from './presence.js';
 import type { ActionParse } from './permission.js';
 import type { Command } from './commands.js';
 import { APP_COMMANDS, FORWARD_COMMAND_NAME, checkUse, parseSlashCommand, sameCommands, slashEcho } from './slash.js';
-import { TargetResolver } from './discord-targets.js';
+import { SendTargets } from './discord-targets.js';
 import type { SendTarget } from './discord-targets.js';
 
 /** 1 通の上限（2000 字）に、コードブロックを閉じ直す分の余裕を持たせる */
@@ -237,7 +237,7 @@ export class DiscordBridge {
   /** 送信やボタン操作を受け付ける会話（許可ユーザーの DM + access.channels） */
   private readonly allowedConversations = new Set<string>();
   /** 送り先の解決と、メッセージのある場所・ボットが関わったスレッドの記録 */
-  private readonly targets: TargetResolver;
+  private readonly targets: SendTargets;
 
   private botUserId: string | undefined;
   private handlers: DiscordBridgeEvents | undefined;
@@ -263,7 +263,7 @@ export class DiscordBridge {
       partials: [Partials.Channel, Partials.Message],
       allowedMentions: NO_MENTIONS,
     });
-    this.targets = new TargetResolver(this.client, this.logger, (id) => this.isDmChannel(id));
+    this.targets = new SendTargets(this.client, this.logger, (id) => this.isDmChannel(id));
   }
 
   /** Gateway がつながっている（!status 用） */
