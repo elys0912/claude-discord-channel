@@ -50,7 +50,7 @@ function textColumn(line: string): number {
  * 選択肢が 2 つ未満なら選択画面ではない（入力欄の `> ` などを誤認しないため）として undefined を返す。
  */
 export function parseChoiceScreen(screen: string): ChoiceScreen | undefined {
-  const lines = trimmedLines(screen);
+  const lines = linesWithoutTrailingSpace(screen);
   const cursorLine = findCursorLine(lines);
   if (cursorLine < 0) return undefined;
 
@@ -74,14 +74,13 @@ export function parseChoiceScreen(screen: string): ChoiceScreen | undefined {
   };
 }
 
-/** 画面を行に分け、各行の末尾の空白を取る */
-function trimmedLines(screen: string): string[] {
+function linesWithoutTrailingSpace(screen: string): string[] {
   return screen.split('\n').map((l) => l.replace(/\s+$/, ''));
 }
 
 /** 空行を除いた、画面の末尾 maxLines 行 */
 function nonEmptyTail(screen: string, maxLines: number): string[] {
-  return trimmedLines(screen)
+  return linesWithoutTrailingSpace(screen)
     .filter((l) => l.trim() !== '')
     .slice(-maxLines);
 }
