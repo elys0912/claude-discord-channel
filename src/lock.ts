@@ -81,7 +81,7 @@ export class InstanceLock {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    writeFileAtomic(this.file, JSON.stringify(info), { pid: this.pid, removeTempOnError: false });
+    writeFileAtomic(this.file, JSON.stringify(info), this.pid);
   }
 
   /**
