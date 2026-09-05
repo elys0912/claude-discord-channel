@@ -21,6 +21,7 @@ import { HELP_TEXT, parseCommand } from '../src/commands.js';
 import { ChannelServer } from '../src/mcp.js';
 import { PermissionRelay } from '../src/permission-relay.js';
 import { ACCESS, BOT, CH, DM1, DM2, FakeDiscord, STRANGER, USER1, cardText, componentIds, flush } from './helpers/fake-discord.js';
+import type { Call } from './helpers/fake-discord.js';
 import type { ParsedAccess } from '../src/config.js';
 import type { BridgeAppOptions } from '../src/app.js';
 import type { ConsoleKey } from '../src/console.js';
@@ -1265,7 +1266,7 @@ describe('コンソールや再起動の印が無いブリッジ', () => {
 async function drainHooks(h: Harness, file: string, fields: Record<string, unknown> = {}): Promise<void> {
   const marker = `drain-${Math.random().toString(36).slice(2)}`;
   fs.appendFileSync(file, JSON.stringify({ at: Date.now(), hook_event_name: 'StopFailure', error_details: marker, ...fields }) + '\n');
-  const isMarker = (c: { card?: unknown }) => cardText(c.card as never).includes(marker);
+  const isMarker = (c: Call) => cardText(c.card).includes(marker);
   await vi.waitFor(() => expect(h.discord.calls.some(isMarker)).toBe(true));
   for (let i = h.discord.calls.length - 1; i >= 0; i--) {
     const call = h.discord.calls[i];
