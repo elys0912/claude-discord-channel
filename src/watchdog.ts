@@ -17,7 +17,6 @@ export interface WatchdogOptions {
   logger: Logger;
   /** 無応答のまま待ち時間を過ぎたときに呼ぶ。投げても見張りは止まらない */
   notify: (target: WatchdogTarget, minutes: number) => Promise<void>;
-  now?: (() => number) | undefined;
 }
 
 /**
@@ -29,7 +28,6 @@ export class ResponseWatchdog {
   private readonly timeoutMs: number;
   private readonly logger: Logger;
   private readonly notify: WatchdogOptions['notify'];
-  private readonly now: () => number;
   private timer: ReturnType<typeof setTimeout> | undefined;
   /** 最後にメッセージを渡してから応答が無い間、渡した時刻（epoch ms）。応答があれば undefined */
   private waitingSinceMs: number | undefined;
@@ -38,12 +36,11 @@ export class ResponseWatchdog {
     this.timeoutMs = opts.timeoutMs;
     this.logger = opts.logger;
     this.notify = opts.notify;
-    this.now = opts.now ?? Date.now;
   }
 
   /** Claude にメッセージを渡した。待ち時間を最初から数え直す */
   delivered(target: WatchdogTarget): void {
-    this.waitingSinceMs = this.now();
+    this.waitingSinceMs = Date.now();
     if (this.timeoutMs <= 0) return;
     this.clear();
     const timer = setTimeout(() => {
@@ -60,7 +57,7 @@ export class ResponseWatchdog {
     this.clear();
   }
 
-  /** 終了時用。見張りを解く（中身は activity と同じ） */
+  /** 終了時用。見張りを解く（終了時も、応答があったときと同じく待ち時間の計測をやめるだけでよい） */
   stop(): void {
     this.activity();
   }
