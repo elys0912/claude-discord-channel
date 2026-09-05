@@ -28,6 +28,11 @@ export function threadName(content: string): string {
   return truncateUnits(oneLine, THREAD_NAME_MAX);
 }
 
+/** スレッドを使わず、チャンネルの中で messageId のメッセージへの返信として送る */
+function replyInChannel(channel: SendableChannels, messageId: string): SendTarget {
+  return { channel, replyTo: messageId };
+}
+
 export class TargetResolver {
   private readonly client: Client;
   private readonly logger: Logger;
@@ -76,7 +81,7 @@ export class TargetResolver {
   async resolveTarget(conversation: string, threadTs: string | undefined): Promise<SendTarget> {
     if (threadTs === undefined) return { channel: await this.sendable(conversation) };
     if (this.isDmChannel(conversation) || this.threadlessTargets.has(threadTs)) {
-      return { channel: await this.sendable(conversation), replyTo: threadTs };
+      return replyInChannel(await this.sendable(conversation), threadTs);
     }
 
     const existing = await this.existingThread(conversation, threadTs);
@@ -84,7 +89,7 @@ export class TargetResolver {
 
     const base = await this.sendable(conversation);
     // スレッドを作れるのはテキストチャンネルとアナウンスチャンネルだけ（DM などは元メッセージへの返信にする）
-    if (base.type !== ChannelType.GuildText && base.type !== ChannelType.GuildAnnouncement) return { channel: base, replyTo: threadTs };
+    if (base.type !== ChannelType.GuildText && base.type !== ChannelType.GuildAnnouncement) return replyInChannel(base, threadTs);
     return this.startThread(base, threadTs);
   }
 
@@ -110,7 +115,7 @@ export class TargetResolver {
     } catch (e) {
       this.logger.warn(`スレッドを作れなかったので、元のメッセージへの返信にする thread=${threadTs}`, errMessage(e));
       this.threadlessTargets.set(threadTs, true);
-      return { channel: base, replyTo: threadTs };
+      return replyInChannel(base, threadTs);
     }
   }
 
