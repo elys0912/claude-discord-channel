@@ -27,7 +27,8 @@ GitHub Actions（`.github/workflows/ci.yml`）は、main への push と pull re
    - 対象は `gate` / `card` / `permission` / `format` / `chunk` / `screen` / `allow-rules` / `config` / `presence` / `keepalive` / `long-reply` / `send-file` / `inline-text` など。
    - I/O は使わないか、一時フォルダーだけを使う。
 2. **結合テスト**: 部品をつないで、実際に近い経路を通す。
-   - `app.test.ts`: 偽の Discord（`test/helpers/fake-discord.ts`）とインメモリの MCP クライアントで `startBridgeApp` を動かす。受信から、Claude への通知、ツールの呼び出し、Discord への投稿までを通して確かめる。
+   - `app.test.ts`: 偽の Discord（`test/helpers/fake-discord.ts`）とインメモリの MCP クライアントで `startBridgeApp` を動かす（起動の道具は `test/helpers/app-harness.ts`）。受信から、Claude への通知、ツールの呼び出し、Discord への投稿までを通して確かめる。
+     コマンドは `app-command.test.ts`、縮退モードは `app-degraded.test.ts`、hook などの記録からの知らせは `app-hook.test.ts`、実行許可の設定は `app-permission.test.ts` に分けている。
    - `mcp.test.ts`: 実際の MCP SDK のクライアントとサーバーをつなぎ、ツールの一覧・呼び出し・通知を確かめる。
    - `download.test.ts`: Windows では実際の `tar.exe` で、展開・Zip Slip の拒否・上限を超えたときの中断と後始末を確かめる。Windows 以外では、tar を使うテストを飛ばす。
    - `hook.test.ts` / `hook-inbox.test.ts` / `lock.test.ts`: 実際のファイルを読み書きして確かめる。
@@ -104,6 +105,7 @@ GitHub Actions（`.github/workflows/ci.yml`）は、main への push と pull re
 | `config/*.example*` | `projects.json` / `access.json` / `.env` / `extra-mcp.json` のひな形 |
 | `test/*.test.ts` | vitest のテスト |
 | `test/helpers/fake-discord.ts` | `DiscordBridge` の差し替え（送ったものを記録する。`app.test.ts` などで共用） |
+| `test/helpers/app-harness.ts` | 偽の Discord とインメモリの MCP でブリッジを起動し、往復を確かめる道具（`app*.test.ts` で共用） |
 | `test/helpers/fake-console.ts` | ターミナル（`ConsoleAccess`）の差し替え（送られたキーとコマンドを配列に入れる。app 系のテストと `session-control.test.ts` で共用） |
 | `test/helpers/random-text.ts` | 固定シードの乱数と、`chunkText` の試験に使う乱数のテキスト（`chunk.test.ts`・`chunk-legacy.test.ts` で共用） |
 | `test/helpers/chunk-reconstruct.ts` | `chunkText` の出力から足したフェンスを取り除いて元の文字列に戻し、整合を確かめる（`chunk.test.ts`・`chunk-legacy.test.ts` で共用） |
