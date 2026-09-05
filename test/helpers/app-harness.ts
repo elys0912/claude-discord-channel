@@ -1,7 +1,6 @@
 // app 系のテスト（app*.test.ts）で共用する、ブリッジを起動して往復を確かめるための道具。
 // Discord は偽物の FakeDiscord（受信は本物の gate、ボタンは本物の parseInteraction を通す）、
 // MCP は in-memory トランスポート + Client で、本物の ChannelServer / PermissionRelay などをつなぐ。
-import { vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { startBridgeApp } from '../../src/app.js';
@@ -21,11 +20,9 @@ export interface Harness {
   client: Client;
   notifications: Notification[];
   stop: () => Promise<void>;
-  lockReleased: number;
-  order: string[];
 }
 
-type Extra = Omit<BridgeAppOptions, 'bridge' | 'logger' | 'transport' | 'lock' | 'replyTimeoutMs'>;
+type Extra = Omit<BridgeAppOptions, 'bridge' | 'logger' | 'transport' | 'replyTimeoutMs'>;
 
 export type HarnessOptions = Extra & {
   /** 偽の Discord の許可設定（既定は ACCESS） */
@@ -36,11 +33,11 @@ export type HarnessOptions = Extra & {
 };
 
 /**
- * 偽の Discord と in-memory の MCP でブリッジを起動する。lock は release の回数を数え、
- * bridge.stop と lock.release の呼び出しを order に順に残す（停止の順序の確認用）
+ * 偽の Discord と in-memory の MCP でブリッジを起動する。
+ * lock を渡さなければ何もしない lock を渡す（本番と同じく lock がある経路を通すため）
  */
 export async function startHarness(options: HarnessOptions = {}): Promise<Harness> {
-  const { access = ACCESS, replyTimeoutMs, fromDiscord, ...extra } = options;
+  const { access = ACCESS, replyTimeoutMs, fromDiscord, lock = { release: () => undefined }, ...extra } = options;
   const discord = new FakeDiscord(access);
   const logger = new Logger({ stderr: false });
 
@@ -51,24 +48,10 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     notifications.push(n as Notification);
   };
 
-  const harness: Harness = { discord, logger, client, notifications, stop: async () => undefined, lockReleased: 0, order: [] };
-
-  const originalStop = discord.stop.bind(discord);
-  vi.spyOn(discord, 'stop').mockImplementation(async () => {
-    harness.order.push('bridge.stop');
-    await originalStop();
-  });
-  const lock = {
-    release: () => {
-      harness.lockReleased += 1;
-      harness.order.push('lock.release');
-    },
-  };
-
   const app = await startBridgeApp({ bridge: discord, logger, transport: serverTransport, lock, replyTimeoutMs, ...extra, ...fromDiscord?.(discord) });
   await client.connect(clientTransport);
-  harness.stop = app.stop;
-  return harness;
+
+  return { discord, logger, client, notifications, stop: app.stop };
 }
 
 /** MCP の client と、ブリッジ（startBridgeApp）を閉じる */

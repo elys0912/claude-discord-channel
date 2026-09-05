@@ -355,20 +355,32 @@ describe('停止', () => {
   it('stop は lock.release → relay.denyAll → bridge.stop → server.close の順で、2 回呼んでも 1 回だけ片付ける', async () => {
     const order: string[] = [];
     recordServerClose(order);
-    const h = await startHarness();
+    let lockReleased = 0;
+    const lock = {
+      release: () => {
+        lockReleased += 1;
+        order.push('lock.release');
+      },
+    };
+    const h = await startHarness({ lock });
+    const originalBridgeStop = h.discord.stop.bind(h.discord);
+    vi.spyOn(h.discord, 'stop').mockImplementation(async () => {
+      order.push('bridge.stop');
+      await originalBridgeStop();
+    });
     const originalDenyAll = PermissionRelay.prototype.denyAll;
     vi.spyOn(PermissionRelay.prototype, 'denyAll').mockImplementation(async function (this: PermissionRelay, reason) {
-      h.order.push('relay.denyAll');
+      order.push('relay.denyAll');
       return originalDenyAll.call(this, reason);
     });
     await h.client.close();
     order.length = 0;
-    h.order.length = 0;
+
     await h.stop();
     await h.stop();
-    expect([...h.order, ...order]).toEqual(['lock.release', 'relay.denyAll', 'bridge.stop', 'server.close']);
+    expect(order).toEqual(['lock.release', 'relay.denyAll', 'bridge.stop', 'server.close']);
     expect(h.discord.stopped).toBe(1);
-    expect(h.lockReleased).toBe(1);
+    expect(lockReleased).toBe(1);
   });
 
   it('stop は保留中の permission request に deny を返し、カードを書き換えてから切断する', async () => {
