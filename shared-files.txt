@@ -48,6 +48,7 @@ test/allow-extra-check.test.ts
 test/allow-rules.test.ts
 test/bounded-map.test.ts
 test/chunk-legacy.test.ts
+test/chunk-reconstruct.test.ts
 test/chunk.test.ts
 test/env-switch.test.ts
 test/console-script.test.ts
