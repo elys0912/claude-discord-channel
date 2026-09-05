@@ -52,8 +52,14 @@ describe('このセッション中は全部許可', () => {
   let hooks: string;
   const cards = () => h.discord.of('postCard');
 
-  /** managed: managed settings のファイルの中身（省略時はファイルを置かない） */
-  async function start(sessionAllowAll: boolean, managed?: string): Promise<void> {
+  interface StartOptions {
+    /** 全部許可を有効にできるボットか */
+    sessionAllowAll: boolean;
+    /** managed settings のファイルの中身（省略時はファイルを置かない） */
+    managed?: string;
+  }
+
+  async function start({ sessionAllowAll, managed }: StartOptions): Promise<void> {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-allowall-'));
     const settings = path.join(dir, 'settings.json');
     fs.writeFileSync(settings, JSON.stringify({ permissions: { ask: ['Bash(git push:*)'], deny: ['Bash(rm:*)', 'Read(.env)', 'Read(~/.ssh/**)'] } }));
@@ -78,23 +84,29 @@ describe('このセッション中は全部許可', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  /** 全部許可のボタンを押して有効にする。ボタンが出ることは「ボタンで有効にすると」のテストで確かめる */
   async function enableByButton(): Promise<void> {
     await sendBash(h.client, 'git status');
-    expect(componentIds(cards()[0]?.card)).toContain('perm:session:abcde');
+    if (!componentIds(cards()[0]?.card).includes('perm:session:abcde')) throw new Error('前提が崩れた: 全部許可のボタンが出ていない');
     await h.discord.press('perm:session:abcde', { message: cards()[0]?.ts });
     await flush();
     h.discord.clear();
   }
 
   it('無効なボットにはボタンを出さない', async () => {
-    await start(false);
+    await start({ sessionAllowAll: false });
     await sendBash(h.client, 'git status');
     expect(componentIds(cards()[0]?.card)).not.toContain('perm:session:abcde');
   });
 
   it('ボタンで有効にすると、今回を許可し、以後は ask 以外をボタン無しで許可して記録する', async () => {
-    await start(true);
-    await enableByButton();
+    await start({ sessionAllowAll: true });
+    // enableByButton と同じ手順を、ボタンが出ることの確認を挟んで書く
+    await sendBash(h.client, 'git status');
+    expect(componentIds(cards()[0]?.card)).toContain('perm:session:abcde');
+    await h.discord.press('perm:session:abcde', { message: cards()[0]?.ts });
+    await flush();
+    h.discord.clear();
     expect(verdicts(h)).toEqual([{ request_id: 'abcde', behavior: 'allow' }]);
 
     await sendBash(h.client, 'npm test', 'fghij');
@@ -106,7 +118,7 @@ describe('このセッション中は全部許可', () => {
   });
 
   it('deny は照合しない（Claude Code が確認の前に止めるため）。範囲付きの Read の deny があっても、別の場所の Read は自動許可する', async () => {
-    await start(true);
+    await start({ sessionAllowAll: true });
     await enableByButton();
 
     await h.client.notification({
@@ -119,7 +131,7 @@ describe('このセッション中は全部許可', () => {
   });
 
   it('有効でも、settings の ask に当たるものはボタンで聞く（全部許可のボタンはもう出さない）', async () => {
-    await start(true);
+    await start({ sessionAllowAll: true });
     await enableByButton();
 
     await sendBash(h.client, 'git push origin main', 'fghij');
@@ -129,7 +141,7 @@ describe('このセッション中は全部許可', () => {
   });
 
   it('managed settings の ask に当たるものも、ボタンで聞く', async () => {
-    await start(true, JSON.stringify({ permissions: { ask: ['Bash(npm publish:*)'] } }));
+    await start({ sessionAllowAll: true, managed: JSON.stringify({ permissions: { ask: ['Bash(npm publish:*)'] } }) });
     await enableByButton();
 
     await sendBash(h.client, 'cd pkg && npm publish', 'fghij');
@@ -138,13 +150,13 @@ describe('このセッション中は全部許可', () => {
   });
 
   it('managed settings が読めない（JSON でない）ときは、全部許可のボタンを出さない', async () => {
-    await start(true, '{ broken');
+    await start({ sessionAllowAll: true, managed: '{ broken' });
     await sendBash(h.client, 'git status');
     expect(componentIds(cards()[0]?.card)).not.toContain('perm:session:abcde');
   });
 
   it('!lock で解除すると、またボタンで聞く', async () => {
-    await start(true);
+    await start({ sessionAllowAll: true });
     await enableByButton();
 
     await h.discord.dm('!lock');
@@ -158,7 +170,7 @@ describe('このセッション中は全部許可', () => {
   });
 
   it('!clear などで新しい会話になったら（SessionStart source=clear）解除する', async () => {
-    await start(true);
+    await start({ sessionAllowAll: true });
     await enableByButton();
 
     fs.appendFileSync(hooks, JSON.stringify({ at: Date.now(), session_id: 's2', hook_event_name: 'SessionStart', source: 'clear' }) + '\n');
