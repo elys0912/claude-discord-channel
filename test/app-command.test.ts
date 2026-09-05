@@ -11,22 +11,35 @@ import { channelMessages, sendBash, useHarness, verdicts } from './helpers/app-h
 import type { ConsoleKey } from '../src/console.js';
 
 describe('parseCommand', () => {
-  it('コマンドだけの本文を正規化して返す', () => {
-    expect(parseCommand('!status')).toBe('status');
-    expect(parseCommand('  !RESTART   FORCE ')).toBe('restart force');
-    expect(parseCommand('!clear')).toBe('clear');
-    expect(parseCommand('!Help')).toBe('help');
-    expect(parseCommand('!stop')).toBe('stop');
-    expect(parseCommand('!keepalive')).toBe('keepalive');
-    expect(parseCommand('!keepalive  OFF')).toBe('keepalive off');
+  it.each([
+    ['!status', 'status'],
+    ['  !RESTART   FORCE ', 'restart force'],
+    ['!clear', 'clear'],
+    ['!Help', 'help'],
+    ['!stop', 'stop'],
+    ['!keepalive', 'keepalive'],
+    ['!keepalive  OFF', 'keepalive off'],
+  ])('コマンドだけの本文を正規化して返す: %j → %j', (text, expected) => {
+    expect(parseCommand(text)).toBe(expected);
   });
 
-  it('コマンドの後ろに普通の文があればコマンドにしない', () => {
-    expect(parseCommand('!restart してから続けて')).toBeUndefined();
-    expect(parseCommand('!restart\nそのあと *これ* を見て')).toBeUndefined();
-    expect(parseCommand('!keepalive maybe')).toBeUndefined();
-    expect(parseCommand('/clear')).toBeUndefined();
-    expect(parseCommand('status')).toBeUndefined();
+  it.each(['!restart してから続けて', '!restart\nそのあと *これ* を見て', '!keepalive maybe', '/clear', 'status'])(
+    'コマンドの後ろに普通の文がある・! で始まらない本文はコマンドにしない: %j',
+    (text) => {
+      expect(parseCommand(text)).toBeUndefined();
+    }
+  );
+});
+
+describe('HELP_TEXT', () => {
+  it.each(['!help', '!status', '!screen', '!stop', '!rules', '!compact', '!clear', '!restart', '!restart force', '!lock'])('%s を載せる', (command) => {
+    expect(HELP_TEXT).toContain(`\`${command}\``);
+  });
+});
+
+describe('KEEPALIVE_TEXT（つなぎ止めで Claude に送る定型文）', () => {
+  it('ok とだけ書くよう求める', () => {
+    expect(KEEPALIVE_TEXT).toContain('ok とだけ書く');
   });
 });
 
@@ -250,9 +263,6 @@ describe('!status / !restart / !compact / !clear / !stop / !help', () => {
 
     expect(channelMessages(h)).toEqual([]);
     expect(h.discord.of('postText')[0]).toMatchObject({ channel: DM1, threadTs: '8600', text: HELP_TEXT });
-    for (const c of ['!help', '!status', '!screen', '!stop', '!rules', '!compact', '!clear', '!restart', '!restart force', '!lock']) {
-      expect(HELP_TEXT).toContain(`\`${c}\``);
-    }
   });
 });
 
@@ -297,7 +307,6 @@ describe('キャッシュのつなぎ止め', () => {
     expect(texts[1]).toContain('無効');
     expect(texts[2]).toContain('有効');
     expect(channelMessages(h)).toEqual([]);
-    expect(KEEPALIVE_TEXT).toContain('ok とだけ書く');
   });
 });
 
