@@ -101,24 +101,45 @@ describe('縮退モード', () => {
       await vi.waitFor(() => expect(cond()).toBe(true), { timeout: 3000, interval: 5 });
     }
 
-    it('取れるまでは縮退のまま。取れたら同じ MCP の接続のまま通常のブリッジに戻り、Discord には投稿しない', async () => {
+    /** 2 回取り損ねて縮退のまま待つ状態で起動する */
+    async function startBusy() {
       const d = await startDegraded([false]);
       await waitFor(() => d.calls.acquire >= 2);
+      return d;
+    }
+
+    /** ロックを空けて、通常のブリッジに戻り終わるまで待つ */
+    async function freeAndWaitPromoted(d: Awaited<ReturnType<typeof startDegraded>>): Promise<void> {
+      d.calls.free = true;
+      await waitFor(() => d.promoted() === 1);
+    }
+
+    it('取れるまでは縮退のまま。取れたら同じ MCP の接続のまま通常のブリッジに戻り、Discord には投稿しない', async () => {
+      const d = await startBusy();
       const before = await d.client.callTool({ name: 'reply', arguments: { chat_id: DM1, text: 'hi' } });
       expect(toolText(before)).toBe(busy);
 
-      d.calls.free = true;
-      await waitFor(() => d.promoted() === 1);
-      const acquired = d.calls.acquire;
+      await freeAndWaitPromoted(d);
       expect(d.notifications.map((n) => n.method)).toContain('notifications/tools/list_changed');
       expect(d.bridges[0]?.texts()).toEqual([]);
 
       const after = await d.client.callTool({ name: 'reply', arguments: { chat_id: DM1, text: 'hi' } });
       expect(toolText(after)).toMatch(/^sent /);
+    });
 
-      // 戻った後は取り直さない。stop で通常のブリッジごと止まる
+    it('通常のブリッジに戻った後は、ロックを取り直さない', async () => {
+      const d = await startBusy();
+      await freeAndWaitPromoted(d);
+      const acquired = d.calls.acquire;
+
       await new Promise((r) => setTimeout(r, 30));
       expect(d.calls.acquire).toBe(acquired);
+    });
+
+    it('通常のブリッジに戻った後の stop は、通常のブリッジごと止めてロックを 1 回だけ手放す', async () => {
+      const d = await startBusy();
+      await freeAndWaitPromoted(d);
+
       await d.app.stop();
       expect(d.bridges[0]?.stopped).toBe(1);
       expect(d.calls.release).toBe(1);
