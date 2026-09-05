@@ -152,8 +152,14 @@ export const HELP_TEXT = [
   ...COMMAND_SPECS.flatMap((s) => s.help),
 ].join('\n');
 
-/** スラッシュコマンドとして登録するもの（並びは `!help` の行の順） */
-export const COMMAND_SLASH_SPECS: readonly CommandSlashSpec[] = COMMAND_SPECS;
+/**
+ * スラッシュコマンドとして登録するもの。並びは `!help` の行の順で、lock だけを最後にする。
+ * Discord に登録する JSON の並びを、表にまとめる前の登録順（restart → lock）から変えないため
+ */
+export const COMMAND_SLASH_SPECS: readonly CommandSlashSpec[] = [
+  ...COMMAND_SPECS.filter((s) => s.name !== 'lock'),
+  ...COMMAND_SPECS.filter((s) => s.name === 'lock'),
+];
 
 /** スラッシュコマンドの名前と引数をブリッジのコマンドにする。知らない名前なら undefined */
 export function commandFromSlash(name: string, args: SlashArgs): Command | undefined {
