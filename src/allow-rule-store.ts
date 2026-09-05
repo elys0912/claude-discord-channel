@@ -42,6 +42,7 @@ export class AllowRuleStore {
     return true;
   }
 
+  // state-file.ts の writeFileAtomic とは一時ファイルの名前が違う。寄せると、異常終了で残る一時ファイルの名前が変わるため寄せていない
   private write(rules: string[]): void {
     fs.mkdirSync(path.dirname(this.file), { recursive: true });
     const tmp = `${this.file}.tmp.${process.pid}`;
