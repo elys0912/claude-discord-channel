@@ -1,5 +1,5 @@
 // 縮退モード（別のインスタンスがロックを持っているとき）と、ロックを取り直して通常のブリッジに戻る流れのテスト。
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { Logger } from '../src/log.js';
@@ -13,12 +13,24 @@ describe('縮退モード', () => {
   /** 縮退モードのツールが返す定型文（src/app.ts の createDegradedDeps と同じ文面） */
   const busy = 'error: 別のインスタンスが動いているため、この Discord ブリッジは送信できない';
 
+  // 途中の expect で落ちても、relock の setInterval と MCP の接続を次のテストへ持ち越さないため、後始末は afterEach でまとめて行う。
+  // app.stop は 2 回目以降は何もしないので、テストの中で stop を確かめた後に呼んでもよい
+  const opened: { app: { stop: () => Promise<void> }; client: Client }[] = [];
+
+  afterEach(async () => {
+    for (const { app, client } of opened.splice(0)) {
+      await client.close();
+      await app.stop();
+    }
+  });
+
   it('ツールはすべて error 文を返し、permission_request は warn で無視する', async () => {
     const logger = new Logger({ stderr: false });
     const warnSpy = vi.spyOn(logger, 'warn');
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: 'test-client', version: '0.0.1' }, { capabilities: {} });
     const app = await startDegradedApp({ logger, transport: serverTransport });
+    opened.push({ app, client });
     await client.connect(clientTransport);
 
     const reply = await client.callTool({ name: 'reply', arguments: { chat_id: DM1, text: 'hi' } });
@@ -30,9 +42,6 @@ describe('縮退モード', () => {
 
     await sendPermissionRequest(client);
     expect(warnSpy.mock.calls[0]?.[0]).toContain('縮退モード');
-
-    await client.close();
-    await app.stop();
   });
 
   describe('ロックの取り直し（relock）', () => {
@@ -82,6 +91,7 @@ describe('縮退モード', () => {
           },
         },
       });
+      opened.push({ app, client });
       await client.connect(clientTransport);
       return { app, client, calls, notifications, bridges, promoted: () => promoted };
     }
@@ -112,7 +122,6 @@ describe('縮退モード', () => {
       await d.app.stop();
       expect(d.bridges[0]?.stopped).toBe(1);
       expect(d.calls.release).toBe(1);
-      await d.client.close();
     });
 
     it('戻るのに失敗したら、ロックを手放して縮退モードに戻り、次の間隔で取り直す', async () => {
@@ -124,8 +133,6 @@ describe('縮退モード', () => {
       expect(d.calls.release).toBe(2);
       const reply = await d.client.callTool({ name: 'reply', arguments: { chat_id: DM1, text: 'hi' } });
       expect(toolText(reply)).toMatch(/^sent /);
-      await d.app.stop();
-      await d.client.close();
     });
 
     it('失敗して縮退モードに戻った間は、ツールが error 文を返す', async () => {
@@ -134,8 +141,6 @@ describe('縮退モード', () => {
       const reply = await d.client.callTool({ name: 'reply', arguments: { chat_id: DM1, text: 'hi' } });
       expect(toolText(reply)).toBe(busy);
       expect(d.promoted()).toBe(0);
-      await d.app.stop();
-      await d.client.close();
     });
 
     it('戻る途中に stop したら、戻り終わるのを待ってから通常のブリッジを止める', async () => {
@@ -159,6 +164,7 @@ describe('縮退モード', () => {
           },
         },
       });
+      opened.push({ app, client });
       await client.connect(clientTransport);
       await waitFor(() => entered);
 
@@ -169,7 +175,6 @@ describe('縮退モード', () => {
       finish();
       await stopping;
       expect(promotedStop).toHaveBeenCalledTimes(1);
-      await client.close();
     });
 
     it('stop の後は取り直さない', async () => {
@@ -178,7 +183,6 @@ describe('縮退モード', () => {
       const count = d.calls.acquire;
       await new Promise((r) => setTimeout(r, 40));
       expect(d.calls.acquire).toBe(count);
-      await d.client.close();
     });
   });
 
