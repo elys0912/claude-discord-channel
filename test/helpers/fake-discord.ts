@@ -281,6 +281,11 @@ export class FakeDiscord implements AppBridge {
     await this.handlers.onMessage(result, { channel: conversationOf(msg), ts: msg.messageId, threadTs: threadOf(msg), user: msg.authorId });
   }
 
+  /** Gateway が回復できずに閉じたことを模す（本物の DiscordBridge が onGatewayLost を呼ぶ場面） */
+  async gatewayLost(detail: string): Promise<void> {
+    await this.handlers?.onGatewayLost?.(detail);
+  }
+
   /** ボタンを押す・メニューで選ぶ（本物の DiscordBridge.handleInteraction と同じく parseInteraction を通す） */
   async press(customId: string, opts: PressOptions = {}): Promise<void> {
     if (!this.handlers) return;
