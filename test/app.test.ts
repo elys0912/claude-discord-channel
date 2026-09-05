@@ -546,6 +546,9 @@ describe('停止', () => {
 });
 
 describe('縮退モード', () => {
+  /** 縮退モードのツールが返す定型文（src/app.ts の createDegradedDeps と同じ文面） */
+  const busy = 'error: 別のインスタンスが動いているため、この Discord ブリッジは送信できない';
+
   it('ツールはすべて error 文を返し、permission_request は warn で無視する', async () => {
     const logger = new Logger({ stderr: false });
     const warnSpy = vi.spyOn(logger, 'warn');
@@ -554,7 +557,6 @@ describe('縮退モード', () => {
     const app = await startDegradedApp({ logger, transport: serverTransport });
     await client.connect(clientTransport);
 
-    const busy = 'error: 別のインスタンスが動いているため、この Discord ブリッジは送信できない';
     const reply = await client.callTool({ name: 'reply', arguments: { chat_id: DM1, text: 'hi' } });
     expect(reply.content).toEqual([{ type: 'text', text: busy }]);
     const react = await client.callTool({ name: 'react', arguments: { chat_id: DM1, message_id: '1', emoji: '👀' } });
@@ -570,8 +572,6 @@ describe('縮退モード', () => {
   });
 
   describe('ロックの取り直し（relock）', () => {
-    const busy = 'error: 別のインスタンスが動いているため、この Discord ブリッジは送信できない';
-
     /** ツールの結果の 1 つ目の文 */
     const toolText = (res: Awaited<ReturnType<Client['callTool']>>): string =>
       (res.content as { type: string; text?: string }[])[0]?.text ?? '';
