@@ -38,7 +38,7 @@ export function isTextAttachment(f: FileInfo): boolean {
 }
 
 /** ID のある添付（取りに行ける添付） */
-type IdentifiedFile = FileInfo & { id: string };
+export type IdentifiedFile = FileInfo & { id: string };
 
 function hasId(f: FileInfo): f is IdentifiedFile {
   return f.id !== undefined && f.id !== '';
