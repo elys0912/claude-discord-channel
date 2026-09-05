@@ -24,12 +24,18 @@ export interface Harness {
 
 type Extra = Omit<BridgeAppOptions, 'bridge' | 'logger' | 'transport' | 'replyTimeoutMs'>;
 
-export type HarnessOptions = Extra & {
+/** FakeDiscord を使って組み立てる設定。optionsFromDiscord からだけ渡す（渡し口を 1 つにするため） */
+type DiscordBoundOptions = Pick<Extra, 'inline' | 'download'>;
+
+export type HarnessOptions = Omit<Extra, keyof DiscordBoundOptions> & {
   /** 偽の Discord の許可設定（既定は ACCESS） */
   access?: ParsedAccess;
   replyTimeoutMs?: number;
-  /** 偽の Discord を使う設定（添付の取得など）。作った FakeDiscord を受け取って返す */
-  fromDiscord?: (discord: FakeDiscord) => Extra;
+  /**
+   * 作った FakeDiscord を使って組み立てる設定（テキストの添付の差し込み・添付の保存）。
+   * FakeDiscord は startHarness の中で作るため、ほかの設定と違って関数で渡す
+   */
+  optionsFromDiscord?: (discord: FakeDiscord) => DiscordBoundOptions;
 };
 
 /**
@@ -37,7 +43,7 @@ export type HarnessOptions = Extra & {
  * lock を渡さなければ何もしない lock を渡す（本番と同じく lock がある経路を通すため）
  */
 export async function startHarness(options: HarnessOptions = {}): Promise<Harness> {
-  const { access = ACCESS, replyTimeoutMs, fromDiscord, lock = { release: () => undefined }, ...extra } = options;
+  const { access = ACCESS, replyTimeoutMs, optionsFromDiscord, lock = { release: () => undefined }, ...extra } = options;
   const discord = new FakeDiscord(access);
   const logger = new Logger({ stderr: false });
 
@@ -48,7 +54,7 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
     notifications.push(n as Notification);
   };
 
-  const app = await startBridgeApp({ bridge: discord, logger, transport: serverTransport, lock, replyTimeoutMs, ...extra, ...fromDiscord?.(discord) });
+  const app = await startBridgeApp({ bridge: discord, logger, transport: serverTransport, lock, replyTimeoutMs, ...extra, ...optionsFromDiscord?.(discord) });
   await client.connect(clientTransport);
 
   return { discord, logger, client, notifications, stop: app.stop };

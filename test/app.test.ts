@@ -698,7 +698,7 @@ describe('添付ファイル', () => {
 
   it('テキストの添付は中身を本文に差し込んで渡し、inlined に名前を載せる', async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-inline-'));
-    h = await startHarness({ fromDiscord: (discord) => ({ inline: { bridge: discord, logger: new Logger({ stderr: false }) } }) });
+    h = await startHarness({ optionsFromDiscord: (discord) => ({ inline: { bridge: discord, logger: new Logger({ stderr: false }) } }) });
     h.discord.attachments.set('9100', { name: 'message.txt', body: '長い貼り付けの中身' });
 
     await h.discord.dm('', { files: [{ id: '9100', name: 'message.txt', mimetype: 'text/plain', size: 27 }] });
@@ -712,7 +712,7 @@ describe('添付ファイル', () => {
   it('DOWNLOAD_DIR があれば download_file で添付を保存できる', async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-download-'));
     h = await startHarness({
-      fromDiscord: (discord) => ({ download: { info: (ref) => discord.attachmentInfo(ref), fetch: (file) => discord.fetchFile(file), dir } }),
+      optionsFromDiscord: (discord) => ({ download: { info: (ref) => discord.attachmentInfo(ref), fetch: (file) => discord.fetchFile(file), dir } }),
     });
     h.discord.attachments.set('9200', { name: 'data.csv', body: 'a,b\n1,2\n' });
 
