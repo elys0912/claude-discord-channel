@@ -26,7 +26,7 @@ interface CommandSpec<Form extends string> {
   fromSlash?: (args: SlashArgs) => NoInfer<Form>;
 }
 
-/** forms の文字列をリテラルの型のまま受け取り、name と fromSlash がそのどれかであることを型で確かめる */
+/** 型を確かめるためだけの関数（実行時は引数をそのまま返す）。forms をリテラルの型のまま受け取り、name と fromSlash がそのどれかであることを確かめる */
 function spec<const Form extends string>(definition: CommandSpec<Form>): CommandSpec<Form> {
   return definition;
 }
@@ -136,7 +136,10 @@ function isCommand(name: string): name is Command {
   return (COMMANDS as readonly string[]).includes(name);
 }
 
-/** Claude に渡さず、ブリッジ自身が処理するコマンド。形の中の空白は 1 つ以上の空白として受け付ける */
+/**
+ * Claude に渡さず、ブリッジ自身が処理するコマンド。形の中の空白は 1 つ以上の空白として受け付ける。
+ * `restart` が `restart force` より前に並んでも `!restart force` を受け付けるのは、末尾の `\s*$` で後ろの候補を試し直すため（`$` を外すと前方一致で誤る）
+ */
 const COMMAND_RE = new RegExp(String.raw`^\s*!(${COMMANDS.map((c) => c.split(' ').join(String.raw`\s+`)).join('|')})\s*$`, 'i');
 
 /** 本文がブリッジのコマンドならその名前（小文字・空白 1 つに正規化）を返す */
