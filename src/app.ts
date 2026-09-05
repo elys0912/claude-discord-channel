@@ -300,10 +300,9 @@ async function withInlinedText(
 async function handleCommand(wiring: Wiring, command: Command, at: ThreadRef, byUserId: string): Promise<void> {
   const { bridge, screen, rules, status, session, sessionAllow, keepalive } = wiring;
 
-  /** feature が無いブリッジでは、name を使えない旨を返す */
-  const withFeature = async <T>(feature: T | undefined, name: string, run: (available: T) => Promise<unknown>): Promise<void> => {
-    if (feature) await run(feature);
-    else await bridge.postText(at.channel, `⚠️ このブリッジでは ${name} を使えない`, at.threadTs);
+  /** その機能の無いブリッジでは、name を使えない旨を返す */
+  const unavailable = async (name: string): Promise<void> => {
+    await bridge.postText(at.channel, `⚠️ このブリッジでは ${name} を使えない`, at.threadTs);
   };
 
   switch (command) {
@@ -314,31 +313,38 @@ async function handleCommand(wiring: Wiring, command: Command, at: ThreadRef, by
       await screen.show(at.channel, at.threadTs);
       return;
     case 'stop':
-      await withFeature(session, '!stop', (s) => interruptClaude(wiring, s, at, byUserId));
+      if (session) await interruptClaude(wiring, session, at, byUserId);
+      else await unavailable('!stop');
       return;
     case 'keepalive':
     case 'keepalive on':
     case 'keepalive off':
-      await withFeature(keepalive, '!keepalive', (k) => switchKeepalive(wiring, k, command, at, byUserId));
+      if (keepalive) await switchKeepalive(wiring, keepalive, command, at, byUserId);
+      else await unavailable('!keepalive');
       return;
     case 'rules':
-      await withFeature(rules, '!rules', (r) => r.list(at.channel, at.threadTs));
+      if (rules) await rules.list(at.channel, at.threadTs);
+      else await unavailable('!rules');
       return;
     case 'status':
       await bridge.postText(at.channel, status(), at.threadTs);
       return;
     case 'restart':
     case 'restart force':
-      await withFeature(session, '!restart', (s) => s.restart(at, byUserId, command === 'restart force'));
+      if (session) await session.restart(at, byUserId, command === 'restart force');
+      else await unavailable('!restart');
       return;
     case 'compact':
-      await withFeature(session, '!compact', (s) => s.compact(at, byUserId));
+      if (session) await session.compact(at, byUserId);
+      else await unavailable('!compact');
       return;
     case 'clear':
-      await withFeature(session, '!clear', (s) => s.clear(at, byUserId));
+      if (session) await session.clear(at, byUserId);
+      else await unavailable('!clear');
       return;
     case 'lock':
-      await withFeature(sessionAllow, '!lock', (a) => releaseSessionAllow(wiring, a, at, byUserId));
+      if (sessionAllow) await releaseSessionAllow(wiring, sessionAllow, at, byUserId);
+      else await unavailable('!lock');
       return;
     default:
       assertNever(command);
