@@ -11,7 +11,7 @@ import { fence } from '../src/card.js';
 import { ChannelServer } from '../src/mcp.js';
 import { PermissionRelay } from '../src/permission-relay.js';
 import { ACCESS, BOT, CH, DM1, DM2, FakeDiscord, STRANGER, USER1, cardText, componentIds, flush } from './helpers/fake-discord.js';
-import { channelMessages, closeHarness, sendPermissionRequest, startHarness, verdicts } from './helpers/app-harness.js';
+import { channelMessages, closeHarness, sendPermissionRequest, startHarness, useHarness, verdicts } from './helpers/app-harness.js';
 import type { Harness } from './helpers/app-harness.js';
 
 describe('app.ts は import 時に副作用を持たない', () => {
@@ -42,13 +42,7 @@ describe('app.ts は import 時に副作用を持たない', () => {
 });
 
 describe('Discord → MCP', () => {
-  let h: Harness;
-
-  beforeEach(async () => {
-    h = await startHarness();
-  });
-
-  afterEach(() => closeHarness(h));
+  const h = useHarness();
 
   it('DM が notifications/claude/channel として届き、その後 👀 リアクションと入力中の表示が付く', async () => {
     await h.discord.dm('hello', { id: '1001' });
@@ -256,13 +250,7 @@ describe('Discord → MCP', () => {
 });
 
 describe('MCP → Discord', () => {
-  let h: Harness;
-
-  beforeEach(async () => {
-    h = await startHarness();
-  });
-
-  afterEach(() => closeHarness(h));
+  const h = useHarness();
 
   it('reply は返信先を付けて送り、"sent (N message(s))" を返す', async () => {
     const res = await h.client.callTool({ name: 'reply', arguments: { chat_id: DM1, text: 'hi', thread_id: '1001' } });
@@ -543,13 +531,7 @@ describe('createToolHandlers 単体', () => {
 });
 
 describe('チャンネル（access.channels）', () => {
-  let h: Harness;
-
-  beforeEach(async () => {
-    h = await startHarness({ access: { ...ACCESS, channels: [CH] } });
-  });
-
-  afterEach(() => closeHarness(h));
+  const h = useHarness({ access: { ...ACCESS, channels: [CH] } });
 
   const delivered = () => channelMessages(h).map((x) => x.params?.content);
 
@@ -653,15 +635,9 @@ describe('チャンネル（access.channels）', () => {
 });
 
 describe('無応答の見張り（replyTimeoutMs）', () => {
-  let h: Harness;
+  const h = useHarness({ replyTimeoutMs: 60 });
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
   const warnings = () => h.discord.of('postCard').filter((c) => cardText(c.card).includes('応答が無い'));
-
-  beforeEach(async () => {
-    h = await startHarness({ replyTimeoutMs: 60 });
-  });
-
-  afterEach(() => closeHarness(h));
 
   it('Claude が何も返さないまま待ち時間を過ぎたら、その返信先に警告を投稿する', async () => {
     await h.discord.dm('hello', { id: '4000' });
@@ -725,25 +701,24 @@ describe('添付ファイル', () => {
 });
 
 describe('send_file', () => {
-  let h: Harness;
   let dir: string;
   let share: string;
   let outside: string;
 
-  beforeEach(async () => {
+  beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-send-'));
     share = path.join(dir, 'share');
     fs.mkdirSync(share);
     fs.writeFileSync(path.join(share, 'report.txt'), 'report');
     outside = path.join(dir, 'outside.txt');
     fs.writeFileSync(outside, 'outside');
-    h = await startHarness({ upload: { dirs: [share] } });
   });
 
-  afterEach(async () => {
-    await closeHarness(h);
+  afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  const h = useHarness(() => ({ upload: { dirs: [share] } }));
 
   it('UPLOAD_DIRS の中のファイルは確認なしで送る', async () => {
     const res = await h.client.callTool({ name: 'send_file', arguments: { chat_id: DM1, paths: [path.join(share, 'report.txt')], thread_id: '1001' } });
@@ -827,13 +802,7 @@ describe('TODO の進み具合（progress ツール）', () => {
 });
 
 describe('右クリックメニュー（Claude に渡す）', () => {
-  let h: Harness;
-
-  beforeEach(async () => {
-    h = await startHarness({ access: { ...ACCESS, channels: [CH] } });
-  });
-
-  afterEach(() => closeHarness(h));
+  const h = useHarness({ access: { ...ACCESS, channels: [CH] } });
 
   it('ほかの人の発言を、転送の印を付けて Claude に渡し、渡した発言に 👀 を付ける。返信先は渡したことを残した一言', async () => {
     const target = h.discord.makeMessage('このエラーどう思う？', { kind: 'channel', user: STRANGER, id: '9700' });
@@ -880,13 +849,7 @@ describe('右クリックメニュー（Claude に渡す）', () => {
 
 describe('CI の通知（ciWebhooks）', () => {
   const HOOK = '999999999999999990';
-  let h: Harness;
-
-  beforeEach(async () => {
-    h = await startHarness({ access: { ...ACCESS, channels: [CH], ciWebhooks: [HOOK] } });
-  });
-
-  afterEach(() => closeHarness(h));
+  const h = useHarness({ access: { ...ACCESS, channels: [CH], ciWebhooks: [HOOK] } });
 
   it('登録した webhook の投稿を kind=ci で Claude に渡し、👀 を付け、返事はその投稿から作るスレッドに届く', async () => {
     const msg = { ...h.discord.makeMessage('', { kind: 'channel', id: '9900' }), authorId: HOOK, authorIsBot: true, webhookId: HOOK, embedText: 'CI #3 failed' };

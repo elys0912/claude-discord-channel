@@ -1,6 +1,7 @@
 // app 系のテスト（app*.test.ts）で共用する、ブリッジを起動して往復を確かめるための道具。
 // Discord は偽物の FakeDiscord（受信は本物の gate、ボタンは本物の parseInteraction を通す）、
 // MCP は in-memory トランスポート + Client で、本物の ChannelServer / PermissionRelay などをつなぐ。
+import { afterEach, beforeEach } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { startBridgeApp } from '../../src/app.js';
@@ -64,6 +65,48 @@ export async function startHarness(options: HarnessOptions = {}): Promise<Harnes
 export async function closeHarness(h: Harness): Promise<void> {
   await h.client.close();
   await h.stop();
+}
+
+/**
+ * describe の中で呼ぶ。テストごとに startHarness で起動し、テストの後に closeHarness で閉じる。
+ * 返す Harness は、そのテストで起動したものへ読み替える（describe の直下で受け取って、各テストから使う）。
+ * options を関数で渡すと、先に登録した beforeEach（一時フォルダーの作成など）の後で評価する。
+ * 一時フォルダーを消す afterEach は、この呼び出しより前に登録する。vitest は後に登録した afterEach から動かすので、閉じてから消す順になる
+ */
+export function useHarness(options: HarnessOptions | (() => HarnessOptions) = {}): Harness {
+  let current: Harness | undefined;
+
+  beforeEach(async () => {
+    current = await startHarness(typeof options === 'function' ? options() : options);
+  });
+
+  afterEach(async () => {
+    if (current) await closeHarness(current);
+    current = undefined;
+  });
+
+  const started = (): Harness => {
+    if (!current) throw new Error('useHarness の Harness は、テストの中（beforeEach の後）でだけ使える');
+    return current;
+  };
+
+  return {
+    get discord() {
+      return started().discord;
+    },
+    get logger() {
+      return started().logger;
+    },
+    get client() {
+      return started().client;
+    },
+    get notifications() {
+      return started().notifications;
+    },
+    get stop() {
+      return started().stop;
+    },
+  };
 }
 
 /** Bash の permission_request を Claude 側から送る。inputPreview は JSON でない値などもそのまま渡す */
