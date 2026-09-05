@@ -79,7 +79,7 @@ describe('このセッション中は全部許可', () => {
   });
 
   async function enableByButton(): Promise<void> {
-    await sendBash(h, 'git status');
+    await sendBash(h.client, 'git status');
     expect(componentIds(cards()[0]?.card)).toContain('perm:session:abcde');
     await h.discord.press('perm:session:abcde', { message: cards()[0]?.ts });
     await flush();
@@ -88,7 +88,7 @@ describe('このセッション中は全部許可', () => {
 
   it('無効なボットにはボタンを出さない', async () => {
     await start(false);
-    await sendBash(h, 'git status');
+    await sendBash(h.client, 'git status');
     expect(componentIds(cards()[0]?.card)).not.toContain('perm:session:abcde');
   });
 
@@ -97,7 +97,7 @@ describe('このセッション中は全部許可', () => {
     await enableByButton();
     expect(verdicts(h)).toEqual([{ request_id: 'abcde', behavior: 'allow' }]);
 
-    await sendBash(h, 'npm test', 'fghij');
+    await sendBash(h.client, 'npm test', 'fghij');
     expect(verdicts(h).at(-1)).toEqual({ request_id: 'fghij', behavior: 'allow' });
     expect(cards()).toHaveLength(1);
     expect(cardText(cards()[0]?.card)).toContain('自動許可: Bash');
@@ -122,7 +122,7 @@ describe('このセッション中は全部許可', () => {
     await start(true);
     await enableByButton();
 
-    await sendBash(h, 'git push origin main', 'fghij');
+    await sendBash(h.client, 'git push origin main', 'fghij');
     expect(verdicts(h)).toHaveLength(1);
     // git push は許可リストに無いので「今後も許可」も出さない
     expect(componentIds(cards()[0]?.card)).toEqual(['perm:allow:fghij', 'perm:deny:fghij']);
@@ -132,14 +132,14 @@ describe('このセッション中は全部許可', () => {
     await start(true, JSON.stringify({ permissions: { ask: ['Bash(npm publish:*)'] } }));
     await enableByButton();
 
-    await sendBash(h, 'cd pkg && npm publish', 'fghij');
+    await sendBash(h.client, 'cd pkg && npm publish', 'fghij');
     expect(verdicts(h)).toHaveLength(1);
     expect(componentIds(cards()[0]?.card)).toContain('perm:allow:fghij');
   });
 
   it('managed settings が読めない（JSON でない）ときは、全部許可のボタンを出さない', async () => {
     await start(true, '{ broken');
-    await sendBash(h, 'git status');
+    await sendBash(h.client, 'git status');
     expect(componentIds(cards()[0]?.card)).not.toContain('perm:session:abcde');
   });
 
@@ -152,7 +152,7 @@ describe('このセッション中は全部許可', () => {
     expect(h.discord.texts().at(-1)).toContain('解除した');
 
     h.discord.clear();
-    await sendBash(h, 'npm test', 'fghij');
+    await sendBash(h.client, 'npm test', 'fghij');
     expect(verdicts(h)).toHaveLength(1);
     expect(componentIds(cards()[0]?.card)).toContain('perm:session:fghij');
   });
@@ -165,7 +165,7 @@ describe('このセッション中は全部許可', () => {
     await vi.waitFor(() => expect(h.discord.texts().some((t) => t.includes('全部許可」を解除した'))).toBe(true));
 
     h.discord.clear();
-    await sendBash(h, 'npm test', 'fghij');
+    await sendBash(h.client, 'npm test', 'fghij');
     expect(verdicts(h)).toHaveLength(1);
     expect(componentIds(cards()[0]?.card)).toContain('perm:session:fghij');
   });

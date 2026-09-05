@@ -66,7 +66,7 @@ export async function closeHarness(h: Harness): Promise<void> {
   await h.stop();
 }
 
-/** permission_request（Bash の ls）を Claude 側から送る */
+/** Bash の permission_request を Claude 側から送る。inputPreview は JSON でない値などもそのまま渡す */
 export async function sendPermissionRequest(client: Client, requestId = 'abcde', inputPreview = '{"command":"ls"}'): Promise<void> {
   await client.notification({
     method: 'notifications/claude/channel/permission_request',
@@ -75,13 +75,9 @@ export async function sendPermissionRequest(client: Client, requestId = 'abcde',
   await flush();
 }
 
-/** Bash の permission_request を Claude 側から送る */
-export async function sendBash(h: Harness, command: string, requestId = 'abcde'): Promise<void> {
-  await h.client.notification({
-    method: 'notifications/claude/channel/permission_request',
-    params: { request_id: requestId, tool_name: 'Bash', description: 'run', input_preview: JSON.stringify({ command }) },
-  });
-  await flush();
+/** command を実行する Bash の permission_request を送る（input_preview は Claude Code と同じ JSON の形にする） */
+export async function sendBash(client: Client, command: string, requestId = 'abcde'): Promise<void> {
+  await sendPermissionRequest(client, requestId, JSON.stringify({ command }));
 }
 
 /** Claude に渡したメッセージ（notifications/claude/channel） */

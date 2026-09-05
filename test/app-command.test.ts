@@ -82,7 +82,7 @@ describe('ターミナル画面と許可リスト（!screen / 今後も許可 / 
   });
 
   it('今後も許可: 今回は許可し、確認のうえ allow-extra.json に書き込む', async () => {
-    await sendBash(h, 'git status');
+    await sendBash(h.client, 'git status');
     const posted = h.discord.of('postCard')[0]?.ts;
     h.discord.clear();
 
@@ -101,7 +101,7 @@ describe('ターミナル画面と許可リスト（!screen / 今後も許可 / 
 
   it('今後も許可: deny に当たるなら、今回は許可したうえで追加しない旨と当たった deny を知らせる', async () => {
     // 候補は Bash(pwd)。deny の Bash(pwd -P:*) と範囲が重なる
-    await sendBash(h, 'pwd');
+    await sendBash(h.client, 'pwd');
     h.discord.clear();
 
     await h.discord.press('perm:always:abcde');
