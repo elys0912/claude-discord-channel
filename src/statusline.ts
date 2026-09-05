@@ -8,7 +8,7 @@ import { pathToFileURL } from 'node:url';
 import { stateDir } from './config.js';
 import { SESSION_TAG_ENV } from './hook-event.js';
 import { errMessage } from './errors.js';
-import { isObject, writeFileAtomic } from './state-file.js';
+import { isObject } from './state-file.js';
 
 /** 状態ディレクトリに置く使用量の記録 */
 export const USAGE_FILE = 'usage.json';
@@ -107,9 +107,14 @@ export function writeUsage(dir: string, snapshot: UsageSnapshot): boolean {
 
   fs.mkdirSync(dir, { recursive: true });
   const text = JSON.stringify(snapshot) + '\n';
+  // state-file.ts の writeFileAtomic は使わない。一時ファイルの名前と、置き換えに失敗したときの後始末・直接書きが違うため。
+  // 一時ファイルに書けなければ投げる（main() が「記録に失敗」を出す）
+  const temp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temp, text);
   try {
-    writeFileAtomic(file, text);
+    fs.renameSync(temp, file);
   } catch {
+    fs.rmSync(temp, { force: true });
     fs.writeFileSync(file, text);
   }
   return true;
