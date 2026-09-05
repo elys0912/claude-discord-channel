@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DM1, DM2, cardText, componentIds, flush } from './helpers/fake-discord.js';
 import type { Call } from './helpers/fake-discord.js';
 import { fakeConsole } from './helpers/fake-console.js';
-import { closeHarness, sendPermissionRequest, startHarness } from './helpers/app-harness.js';
+import { closeHarness, sendPermissionRequest, startHarness, useHarness } from './helpers/app-harness.js';
 import type { Harness } from './helpers/app-harness.js';
 
 /**
@@ -25,26 +25,25 @@ async function drainHooks(h: Harness, file: string, fields: Record<string, unkno
 }
 
 describe('hook の記録（hooks.jsonl）からの知らせ', () => {
-  let h: Harness;
   let dir: string;
   let file: string;
-  const cards = () => h.discord.of('postCard');
   const hookLine = (fields: Record<string, unknown>) => JSON.stringify({ at: Date.now(), session_id: 's1', ...fields }) + '\n';
 
-  beforeEach(async () => {
+  beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-hooks-'));
     file = path.join(dir, 'hooks.jsonl');
-    h = await startHarness({
-      hookInboxFile: file,
-      hookPollMs: 20,
-      console: fakeConsole(),
-    });
   });
 
-  afterEach(async () => {
-    await closeHarness(h);
+  afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  const h = useHarness(() => ({
+    hookInboxFile: file,
+    hookPollMs: 20,
+    console: fakeConsole(),
+  }));
+  const cards = () => h.discord.of('postCard');
 
   it('ターミナル側の許可待ちは、画面を確認するボタン付きのカードで許可ユーザー全員の DM に出す', async () => {
     fs.appendFileSync(file, hookLine({ hook_event_name: 'Notification', notification_type: 'permission_prompt', message: 'needs permission' }));
@@ -95,7 +94,6 @@ describe('hook の記録（hooks.jsonl）からの知らせ', () => {
 });
 
 describe('自分のセッションの hook だけ扱う（session_tag）と、!restart で同じ会話を開き直す（session_id）', () => {
-  let h: Harness;
   let dir: string;
   let file: string;
   let flag: string;
@@ -103,23 +101,26 @@ describe('自分のセッションの hook だけ扱う（session_tag）と、!r
   const MINE = 'c2097ecd-29b0-4cee-9f3e-a9aeace64bc3';
   const OTHER = '0d1e2f3a-4b5c-4d6e-8f90-a1b2c3d4e5f6';
 
-  beforeEach(async () => {
+  beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-tag-'));
     file = path.join(dir, 'hooks.jsonl');
     flag = path.join(dir, 'restart.flag');
-    h = await startHarness({
-      hookInboxFile: file,
-      hookPollMs: 20,
-      sessionTag: 'tag-mine',
-      restartFlagFile: flag,
-      console: fakeConsole({ screen: '❯ ' }),
-    });
-    h.discord.clear();
   });
 
-  afterEach(async () => {
-    await closeHarness(h);
+  afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  const h = useHarness(() => ({
+    hookInboxFile: file,
+    hookPollMs: 20,
+    sessionTag: 'tag-mine',
+    restartFlagFile: flag,
+    console: fakeConsole({ screen: '❯ ' }),
+  }));
+
+  beforeEach(() => {
+    h.discord.clear();
   });
 
   it('タグが違う・無い行は知らせない。同じタグの行だけ知らせる', async () => {
@@ -160,42 +161,42 @@ describe('自分のセッションの hook だけ扱う（session_tag）と、!r
 });
 
 describe('使用量の見張りと、想定外の終了からの起動し直しの知らせ', () => {
+  // 起動する前に記録のファイルを置くので、useHarness ではなく各テストで起動する
+  let h: Harness | undefined;
   let dir: string;
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-usage-'));
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    if (h) await closeHarness(h);
+    h = undefined;
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
   it('起動時に crash.json があれば知らせて消す', async () => {
     const crashFile = path.join(dir, 'crash.json');
     fs.writeFileSync(crashFile, JSON.stringify({ at: Date.now(), exit_code: 1, count: 1, max: 3, window_min: 10, resumed: true }));
-    const h = await startHarness({ crashFile });
-    try {
-      expect(h.discord.texts().some((t) => t.includes('想定外に終了した（exit code 1）'))).toBe(true);
-      expect(fs.existsSync(crashFile)).toBe(false);
-    } finally {
-      await closeHarness(h);
-    }
+    const started = await startHarness({ crashFile });
+    h = started;
+
+    expect(started.discord.texts().some((t) => t.includes('想定外に終了した（exit code 1）'))).toBe(true);
+    expect(fs.existsSync(crashFile)).toBe(false);
   });
 
   it('usage.json の使用量がしきい値を越えたら知らせ、!status に使用量の行を出す', async () => {
     const file = path.join(dir, 'usage.json');
     const resetsAt = Math.floor(Date.now() / 1000) + 3600;
     fs.writeFileSync(file, JSON.stringify({ at: Date.now(), five_hour: { used: 85, resets_at: resetsAt } }));
-    const h = await startHarness({
+    const started = await startHarness({
       usageWatch: { file, usageWarnPct: [80, 95], contextWarnPct: [70, 90], pollMs: 10 },
     });
-    try {
-      await vi.waitFor(() => expect(h.discord.texts().some((t) => t.includes('使用量（5 時間枠）が 85%'))).toBe(true));
-      await h.discord.dm('!status');
-      await flush();
-      expect(h.discord.texts().at(-1)).toContain('使用量: 5 時間枠 85%');
-    } finally {
-      await closeHarness(h);
-    }
+    h = started;
+
+    await vi.waitFor(() => expect(started.discord.texts().some((t) => t.includes('使用量（5 時間枠）が 85%'))).toBe(true));
+    await started.discord.dm('!status');
+    await flush();
+    expect(started.discord.texts().at(-1)).toContain('使用量: 5 時間枠 85%');
   });
 });
