@@ -20,41 +20,57 @@ function cardText(card: Card): string {
   return [card.title, card.body].filter(Boolean).join(' ');
 }
 
-/** スレッド返信（postCard）を使わないテスト用の実装 */
-const noReply = async (): Promise<{ ts: string }> => ({ ts: '' });
+/** D1 にだけ届いた配信の結果 */
+const deliveredToD1: RelayBridge['postToAll'] = async () => [{ channel: 'D1', ts: '10' }];
 
-function setup(now: () => number = () => 0, opts: { reply?: 'ok' | 'throw' | 'empty'; sessionAllow?: SessionAllowAll } = {}) {
+interface SetupOptions {
+  reply?: 'ok' | 'throw' | 'empty';
+  sessionAllow?: SessionAllowAll;
+  /** postToAll の差し替え（省略時は D1 に届き D2 で失敗した結果を返し、posts に記録する） */
+  postToAll?: RelayBridge['postToAll'];
+  /** true を返した verdict は、記録してから送信の失敗として投げる */
+  failVerdict?: (v: Verdict) => boolean;
+  /** カードの書き換えを失敗させる */
+  failUpdate?: boolean;
+}
+
+function setup(now: () => number = () => 0, opts: SetupOptions = {}) {
   const posts: { card: Card | string; threadFor: (ch: string) => string | undefined }[] = [];
   const replies: { channel: string; threadTs: string | undefined; card: Card }[] = [];
   const updates: { channel: string; ts: string; text: string }[] = [];
   const verdicts: Verdict[] = [];
 
   const bridge: RelayBridge = {
-    postToAll: async (card, threadFor) => {
-      posts.push({ card, threadFor: threadFor ?? (() => undefined) });
-      return [
-        { channel: 'D1', ts: '10' },
-        { channel: 'D2', ts: '' }, // 送信に失敗したチャンネル
-      ];
-    },
+    postToAll:
+      opts.postToAll ??
+      (async (card, threadFor) => {
+        posts.push({ card, threadFor: threadFor ?? (() => undefined) });
+        return [
+          { channel: 'D1', ts: '10' },
+          { channel: 'D2', ts: '' }, // 送信に失敗したチャンネル
+        ];
+      }),
     postCard: async (channel, card, threadTs) => {
       if (opts.reply === 'throw') throw new Error('Missing Access');
       replies.push({ channel, threadTs, card });
       return { ts: opts.reply === 'empty' ? '' : '20' };
     },
     updateCard: async (channel, ts, card) => {
+      if (opts.failUpdate) throw new Error('discord down');
       updates.push({ channel, ts, text: cardText(card) });
     },
   };
   const claude: RelayClaude = {
     sendVerdict: async (v) => {
       verdicts.push(v);
+      if (opts.failVerdict?.(v)) throw new Error('not connected');
     },
   };
 
+  const logger = new Logger({ stderr: false });
   const pending = new PendingPermissions(1000, now);
-  const relay = new PermissionRelay(bridge, claude, new Logger({ stderr: false }), pending, opts.sessionAllow);
-  return { relay, posts, replies, updates, verdicts };
+  const relay = new PermissionRelay(bridge, claude, logger, pending, opts.sessionAllow);
+  return { relay, posts, replies, updates, verdicts, logger };
 }
 
 describe('PermissionRelay', () => {
@@ -146,32 +162,16 @@ describe('PermissionRelay', () => {
     ['テキスト', (relay: PermissionRelay) => relay.answerByText({ requestId: 'abcde', behavior: 'allow' }, 'U1')],
   ])('%sの回答を Claude に送れなかったら、投げずにメッセージを「送れなかった」表示にし、期限のタイマーも止める', async (_label, answer) => {
     vi.useFakeTimers();
-    const updates: string[] = [];
-    const sent: Verdict[] = [];
-    const relay = new PermissionRelay(
-      {
-        postToAll: async () => [{ channel: 'D1', ts: '10' }],
-        postCard: noReply,
-        updateCard: async (_channel, _ts, card) => void updates.push(cardText(card)),
-      },
-      {
-        sendVerdict: async (v) => {
-          sent.push(v);
-          throw new Error('not connected');
-        },
-      },
-      new Logger({ stderr: false }),
-      new PendingPermissions(1000, () => 0)
-    );
+    const { relay, updates, verdicts } = setup(() => 0, { postToAll: deliveredToD1, failVerdict: () => true });
     await relay.request(REQ);
     updates.length = 0;
     await expect(answer(relay)).resolves.not.toThrow();
 
-    expect(updates).toEqual([expect.stringContaining('Allow を Claude に送れなかった')]);
+    expect(updates.map((u) => u.text)).toEqual([expect.stringContaining('Allow を Claude に送れなかった')]);
     expect(relay.lookup('abcde')).toBeUndefined();
     // 期限が来ても deny を重ねて送らない（Claude には既に届いていない）
     await vi.advanceTimersByTimeAsync(2000);
-    expect(sent).toEqual([{ requestId: 'abcde', behavior: 'allow' }]);
+    expect(verdicts).toEqual([{ requestId: 'abcde', behavior: 'allow' }]);
     vi.useRealTimers();
   });
 
@@ -290,42 +290,22 @@ describe('PermissionRelay', () => {
     });
 
     it('deny の送信や書き換えに失敗しても、残りを続けて投げない', async () => {
-      const verdicts: string[] = [];
-      const relay = new PermissionRelay(
-        {
-          postToAll: async () => [{ channel: 'D1', ts: '10' }],
-          postCard: noReply,
-          updateCard: async () => {
-            throw new Error('discord down');
-          },
-        },
-        {
-          sendVerdict: async (v) => {
-            verdicts.push(v.requestId);
-            if (v.requestId === 'abcde') throw new Error('not connected');
-          },
-        },
-        new Logger({ stderr: false }),
-        new PendingPermissions(1000, () => 0)
-      );
+      const { relay, verdicts } = setup(() => 0, {
+        postToAll: deliveredToD1,
+        failVerdict: (v) => v.requestId === 'abcde',
+        failUpdate: true,
+      });
       await relay.request(REQ);
       await relay.request({ ...REQ, request_id: 'fghij' });
       await expect(relay.denyAll('ブリッジ終了')).resolves.toBeUndefined();
-      expect(verdicts).toEqual(['abcde', 'fghij']);
+      expect(verdicts.map((v) => v.requestId)).toEqual(['abcde', 'fghij']);
     });
   });
 
   describe('配信先が 0 件', () => {
     function relayWith(results: { channel: string; ts: string }[]) {
-      const verdicts: Verdict[] = [];
-      const logger = new Logger({ stderr: false });
+      const { relay, verdicts, logger } = setup(() => 0, { postToAll: async () => results });
       const errorSpy = vi.spyOn(logger, 'error');
-      const relay = new PermissionRelay(
-        { postToAll: async () => results, postCard: noReply, updateCard: async () => undefined },
-        { sendVerdict: async (v) => void verdicts.push(v) },
-        logger,
-        new PendingPermissions(1000, () => 0)
-      );
       return { relay, verdicts, errorSpy };
     }
 
@@ -347,19 +327,11 @@ describe('PermissionRelay', () => {
     });
 
     it('postToAll が投げても、deny を送って投げない', async () => {
-      const verdicts: Verdict[] = [];
-      const relay = new PermissionRelay(
-        {
-          postToAll: async () => {
-            throw new Error('boom');
-          },
-          postCard: noReply,
-          updateCard: async () => undefined,
+      const { relay, verdicts } = setup(() => 0, {
+        postToAll: async () => {
+          throw new Error('boom');
         },
-        { sendVerdict: async (v) => void verdicts.push(v) },
-        new Logger({ stderr: false }),
-        new PendingPermissions(1000, () => 0)
-      );
+      });
       await expect(relay.request(REQ)).resolves.toBeUndefined();
       expect(verdicts).toEqual([{ requestId: 'abcde', behavior: 'deny' }]);
     });
@@ -416,25 +388,11 @@ describe('PermissionRelay', () => {
 
     it('deny の送信に失敗しても投げず、メッセージの書き換えは行う', async () => {
       vi.useFakeTimers();
-      const updates: string[] = [];
-      const relay = new PermissionRelay(
-        {
-          postToAll: async () => [{ channel: 'D1', ts: '10' }],
-          postCard: noReply,
-          updateCard: async (_channel, _ts, card) => void updates.push(cardText(card)),
-        },
-        {
-          sendVerdict: async () => {
-            throw new Error('not connected');
-          },
-        },
-        new Logger({ stderr: false }),
-        new PendingPermissions(1000, () => 0)
-      );
+      const { relay, updates } = setup(() => 0, { postToAll: deliveredToD1, failVerdict: () => true });
       await relay.request(REQ);
       await vi.advanceTimersByTimeAsync(1000);
       expect(updates).toHaveLength(1);
-      expect(updates[0]).toContain('自動で拒否した');
+      expect(updates[0]?.text).toContain('自動で拒否した');
     });
   });
 });
