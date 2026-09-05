@@ -622,9 +622,9 @@ describe('縮退モード', () => {
       return { app, client, calls, notifications, bridges, promoted: () => promoted };
     }
 
+    /** cond が真になるまで待つ（起きるのを待つ側。起きないことの確認は、下の各テストで固定時間を待つ） */
     async function waitFor(cond: () => boolean): Promise<void> {
-      for (let i = 0; i < 200 && !cond(); i += 1) await new Promise((r) => setTimeout(r, 5));
-      expect(cond()).toBe(true);
+      await vi.waitFor(() => expect(cond()).toBe(true), { timeout: 3000, interval: 5 });
     }
 
     it('取れるまでは縮退のまま。取れたら同じ MCP の接続のまま通常のブリッジに戻り、Discord には投稿しない', async () => {
