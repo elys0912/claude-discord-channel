@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runPowerShellCommand } from './helpers/powershell.js';
+import { afterEach, beforeEach, expect, it } from 'vitest';
+import { describeOnWindows, runPowerShellCommand } from './helpers/powershell.js';
 
 const common = path.join(import.meta.dirname, '..', 'scripts', 'common.ps1');
 
@@ -13,8 +13,7 @@ function ps(command: string): string {
   return r.stdout.trim();
 }
 
-// powershell.exe の起動は CI の初回だと 5 秒を超えることがある
-describe.runIf(process.platform === 'win32')('scripts/common.ps1 の Read-RestartSessionId', { timeout: 30000 }, () => {
+describeOnWindows('scripts/common.ps1 の Read-RestartSessionId', 30000, () => {
   let dir: string;
   let flag: string;
 
@@ -86,7 +85,7 @@ describe.runIf(process.platform === 'win32')('scripts/common.ps1 の Read-Restar
   });
 });
 
-describe.runIf(process.platform === 'win32')('scripts/common.ps1 の Test-PlaceholderServer', { timeout: 30000 }, () => {
+describeOnWindows('scripts/common.ps1 の Test-PlaceholderServer', 30000, () => {
   let dir: string;
   let config: string;
   const mainJs = 'C:\\repo\\dist\\src\\main.js';
@@ -128,7 +127,7 @@ describe.runIf(process.platform === 'win32')('scripts/common.ps1 の Test-Placeh
 });
 
 // start.ps1 の New-ClaudeArgs が起動のたびに行う、merged.json の組み立て（D-SC-04 / D-DC-02）
-describe.runIf(process.platform === 'win32')('scripts/common.ps1 の Read-AllowExtra / Write-EffectiveSettings', { timeout: 30000 }, () => {
+describeOnWindows('scripts/common.ps1 の Read-AllowExtra / Write-EffectiveSettings', 30000, () => {
   let dir: string;
   let allowExtra: string;
   let checker: string;
@@ -202,7 +201,7 @@ describe.runIf(process.platform === 'win32')('scripts/common.ps1 の Read-AllowE
   });
 });
 
-describe.runIf(process.platform === 'win32')('scripts/common.ps1 の想定外の終了からの起動し直し', { timeout: 30000 }, () => {
+describeOnWindows('scripts/common.ps1 の想定外の終了からの起動し直し', 30000, () => {
   let dir: string;
 
   beforeEach(() => {
