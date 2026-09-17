@@ -3,9 +3,10 @@ import { Logger } from '../src/log.js';
 import { RuleRelay } from '../src/rule-relay.js';
 import type { Card } from '../src/card.js';
 import type { PermissionRequest } from '../src/permission.js';
+import { req } from './helpers/permission-request.js';
 
 function bash(command: string): PermissionRequest {
-  return { request_id: 'abcde', tool_name: 'Bash', description: '', input_preview: JSON.stringify({ command }) };
+  return req('Bash', { command });
 }
 
 /** カードの文言（Markdown のエスケープを外したもの）。ルールの * などを素の形で確かめるため */
