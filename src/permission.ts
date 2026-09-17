@@ -4,11 +4,13 @@ import type { Card, CardButton } from './card.js';
 import { md } from './card.js';
 import type { ParsedAccess } from './config.js';
 import type { Verdict } from './types.js';
-import { isValidRequestId, DEFAULT_PREVIEW_LIMIT, truncatePlain, truncateHeadTail, PREVIEW_TRUNCATED_WARNING, orPlaceholder, TOKEN_ID_RE } from './permission-core.js';
+import { isValidRequestId, DEFAULT_PREVIEW_LIMIT, truncatePlain, truncateHeadTail, PREVIEW_TRUNCATED_WARNING, orPlaceholder } from './permission-core.js';
 import type { PermissionRequest } from './permission-core.js';
+import { TOKEN_ID_RE } from './text.js';
 
 // チャネルによらない部分は permission-core.ts。ほかのモジュールからは今までどおりここから使える
-export { PERMISSION_ID_BODY, PERMISSION_ID_RE, isValidRequestId, PendingPermissions, DEFAULT_PREVIEW_LIMIT, revealInvisible, truncatePlain, truncateHeadTail, PREVIEW_TRUNCATED_WARNING, orPlaceholder, TOKEN_ID_RE } from './permission-core.js';
+export { PERMISSION_ID_BODY, PERMISSION_ID_RE, isValidRequestId, PendingPermissions, DEFAULT_PREVIEW_LIMIT, revealInvisible, truncatePlain, truncateHeadTail, PREVIEW_TRUNCATED_WARNING, orPlaceholder } from './permission-core.js';
+export { TOKEN_ID_RE } from './text.js';
 export type { PermissionRequest } from './permission-core.js';
 
 // --- 実行許可のカード（Discord に出す形は card.ts が決める） ---------------------------
