@@ -1,0 +1,571 @@
+// Discord との出入り口（slack.ts の代わり）。Gateway で受信し、REST で送る。
+// relay 群が使う関数の形は Slack 版にそろえてある（channel = 会話の ID、ts = メッセージの ID、threadTs = 返信先）。
+// - 会話の ID: DM ならその DM のチャンネル、サーバーなら access.channels のチャンネル（スレッドの中でも親チャンネル）
+// - 返信先（threadTs）: サーバーではそのメッセージから作るスレッド（スレッドの ID は元メッセージの ID と同じ）、
+//   DM ではそのメッセージへの返信。スレッドの中のメッセージを後で書き換えられるよう、メッセージのある場所を覚えておく
+import {
+  ChannelType,
+  Client,
+  Events,
+  GatewayIntentBits,
+  MessageType,
+  Partials,
+} from 'discord.js';
+import type {
+  Channel,
+  Interaction,
+  Message,
+  MessageCreateOptions,
+  MessageEditOptions,
+  SendableChannels,
+} from 'discord.js';
+import type { Card } from './card.js';
+import { toDiscord } from './card.js';
+import { chunkText } from './chunk.js';
+import type { ParsedAccess } from './config.js';
+import { errMessage } from './errors.js';
+import { neutralizeBroadcasts } from './format.js';
+import { EventDedupe, conversationOf, gate, threadOf } from './gate.js';
+import type { ChannelKind, GateResult, InboundMessage } from './gate.js';
+import type { Logger } from './log.js';
+import { parseInteraction } from './permission.js';
+import type { ActionParse } from './permission.js';
+
+/** 1 通の上限（2000 字）に、コードブロックを閉じ直す分の余裕を持たせる */
+export const TEXT_CHUNK_MAX = 1900;
+/** ログインして Gateway の準備ができるまで待つ上限 */
+const READY_TIMEOUT_MS = 30_000;
+/** スレッドの名前に使う本文の長さ */
+const THREAD_NAME_MAX = 40;
+/** 覚えておくメッセージの場所・ボットが関わったスレッドの数（古いものから忘れる） */
+const LOCATION_CAPACITY = 2000;
+const ACTIVE_THREAD_CAPACITY = 500;
+/** 添付を取りに行ってよいホスト */
+const CDN_HOSTS = new Set(['cdn.discordapp.com', 'media.discordapp.net']);
+
+/** どの送信でも、誰も呼ばない（@everyone・ロール・ユーザー・返信先への通知を止める） */
+const NO_MENTIONS = { parse: [], repliedUser: false } as const;
+
+/** 受信メッセージの位置情報（リアクションやスレッド返信の宛先に使う） */
+export interface InboundRef {
+  /** 会話の ID */
+  channel?: string | undefined;
+  /** メッセージの ID */
+  ts?: string | undefined;
+  /** 返信先 */
+  threadTs?: string | undefined;
+  user?: string | undefined;
+}
+
+/** ボタンが押されたメッセージと押した人 */
+export interface ActionContext {
+  userId?: string | undefined;
+  /** 会話の ID */
+  channelId?: string | undefined;
+  /** ボタンのあるメッセージの ID */
+  messageTs?: string | undefined;
+  /** ボタンのメッセージがスレッドの中にあるときのスレッドの ID */
+  threadTs?: string | undefined;
+}
+
+export interface DiscordBridgeEvents {
+  onMessage: (r: GateResult, raw: InboundRef) => void | Promise<void>;
+  onAction: (parsed: ActionParse, ctx: ActionContext) => void | Promise<void>;
+  /** 保留中の permission request か（gate に渡す。省略時は `yes xxxxx` の形なら常に verdict） */
+  isKnownRequest?: ((requestId: string) => boolean) | undefined;
+}
+
+export interface DiscordInitResult {
+  botUserId: string;
+  botTag: string;
+  guildName: string;
+  /** 開けた DM チャンネルの件数 */
+  dmChannelCount: number;
+}
+
+/** 添付の場所（download_file の引数） */
+export interface AttachmentRef {
+  chatId: string;
+  messageId: string;
+  attachmentId: string;
+  threadId?: string | undefined;
+}
+
+/** 取りに行く添付の情報 */
+export interface RemoteFile {
+  id: string;
+  name: string;
+  size?: number | undefined;
+  mimetype?: string | undefined;
+  url: string;
+}
+
+export interface DiscordDeps {
+  token: string;
+  access: ParsedAccess;
+  logger: Logger;
+  /** テスト用の差し替え口（省略時はグローバルの fetch。添付のダウンロードに使う） */
+  fetch?: typeof fetch;
+}
+
+/** 古いものから忘れる、大きさに上限のある Map */
+class BoundedMap<V> {
+  private readonly store = new Map<string, V>();
+  constructor(private readonly capacity: number) {}
+
+  get(key: string): V | undefined {
+    return this.store.get(key);
+  }
+
+  has(key: string): boolean {
+    return this.store.has(key);
+  }
+
+  set(key: string, value: V): void {
+    this.store.delete(key);
+    this.store.set(key, value);
+    if (this.store.size > this.capacity) {
+      const oldest = this.store.keys().next();
+      if (!oldest.done) this.store.delete(oldest.value);
+    }
+  }
+}
+
+function channelKind(channel: Channel): ChannelKind {
+  switch (channel.type) {
+    case ChannelType.DM:
+      return 'dm';
+    case ChannelType.GuildText:
+    case ChannelType.GuildAnnouncement:
+      return 'channel';
+    case ChannelType.PublicThread:
+    case ChannelType.PrivateThread:
+    case ChannelType.AnnouncementThread:
+      return 'thread';
+    default:
+      return 'other';
+  }
+}
+
+/** Discord の Message を gate 用の InboundMessage に詰め替える */
+export function toInbound(message: Message, botUserId: string | undefined): InboundMessage {
+  const kind = channelKind(message.channel);
+  const parentId = kind === 'thread' && 'parentId' in message.channel ? (message.channel.parentId ?? undefined) : undefined;
+  return {
+    guildId: message.guildId ?? null,
+    messageId: message.id,
+    kind,
+    channelId: message.channelId,
+    parentId,
+    authorId: message.author.id,
+    authorIsBot: message.author.bot || message.webhookId !== null,
+    isUserMessage: message.type === MessageType.Default || message.type === MessageType.Reply,
+    content: message.content,
+    mentionsBot:
+      botUserId !== undefined &&
+      message.mentions.has(botUserId, { ignoreEveryone: true, ignoreRoles: true, ignoreRepliedUser: true }),
+    repliesToBot: botUserId !== undefined && message.mentions.repliedUser?.id === botUserId,
+    createdAt: message.createdAt.toISOString(),
+    files:
+      message.attachments.size > 0
+        ? message.attachments.map((a) => ({ id: a.id, name: a.name, mimetype: a.contentType ?? undefined, size: a.size }))
+        : undefined,
+  };
+}
+
+/** スレッドの名前（本文の先頭。空なら Claude） */
+function threadName(content: string): string {
+  const oneLine = content.replace(/<@!?\d+>/g, '').replace(/\s+/g, ' ').trim();
+  return oneLine === '' ? 'Claude' : oneLine.slice(0, THREAD_NAME_MAX);
+}
+
+export class DiscordBridge {
+  private readonly access: ParsedAccess;
+  private readonly logger: Logger;
+  private readonly token: string;
+  private readonly fetchFn: typeof fetch;
+  private readonly client: Client;
+  private readonly dedupe = new EventDedupe();
+  /** 許可ユーザー → DM のチャンネル */
+  private readonly dmChannels = new Map<string, string>();
+  /** 送信やボタン操作を受け付ける会話（許可ユーザーの DM + access.channels） */
+  private readonly allowedConversations = new Set<string>();
+  /** メッセージの ID → そのメッセージのあるチャンネル（スレッドの中ならスレッドの ID） */
+  private readonly locations = new BoundedMap<string>(LOCATION_CAPACITY);
+  /** ボットが関わったスレッド（話しかけられた・投稿した）。古いものから忘れる */
+  private readonly activeThreads = new BoundedMap<true>(ACTIVE_THREAD_CAPACITY);
+
+  private botUserId: string | undefined;
+  private handlers: DiscordBridgeEvents | undefined;
+  private connected = false;
+  /** 受信イベントの処理の列（末尾） */
+  private inbound: Promise<void> = Promise.resolve();
+
+  constructor(deps: DiscordDeps) {
+    this.access = deps.access;
+    this.logger = deps.logger;
+    this.token = deps.token;
+    this.fetchFn = deps.fetch ?? fetch;
+    for (const channel of deps.access.channels ?? []) this.allowedConversations.add(channel);
+    this.client = new Client({
+      intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.DirectMessages,
+        GatewayIntentBits.MessageContent,
+      ],
+      // DM のチャンネルは最初は partial で届くので、これが無いと messageCreate が来ない
+      partials: [Partials.Channel, Partials.Message],
+      allowedMentions: NO_MENTIONS,
+    });
+  }
+
+  /** Gateway がつながっている（!status 用） */
+  get isConnected(): boolean {
+    return this.connected;
+  }
+
+  // --- 初期化・起動・停止 -----------------------------------------------------
+
+  /**
+   * ログインして Gateway の準備を待ち、ボットのユーザー ID を覚える。ボットが access.guildId のサーバーに入っているかを確かめ、
+   * allowFrom の各ユーザーと DM を開いて送信先に登録する（開けなかった人はログに残し、DM を受け取った時点で登録する）。
+   * サーバーに入っていない、DM もチャンネルも 1 つも無いときは投げる。
+   */
+  async init(): Promise<DiscordInitResult> {
+    this.bindListeners();
+    const ready = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Discord の準備が時間内に終わらなかった')), READY_TIMEOUT_MS);
+      this.client.once(Events.ClientReady, () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+    await this.client.login(this.token);
+    await ready;
+    this.connected = true;
+    const user = this.client.user;
+    if (!user) throw new Error('ボットのユーザーが取れなかった');
+    this.botUserId = user.id;
+
+    const guild = this.client.guilds.cache.get(this.access.guildId);
+    if (!guild) throw new Error(`ボットが access.json の guildId のサーバーに入っていない（guildId=${this.access.guildId}）`);
+
+    for (const userId of this.access.allowFrom) {
+      try {
+        const dm = await this.client.users.createDM(userId);
+        this.dmChannels.set(userId, dm.id);
+        this.allowedConversations.add(dm.id);
+      } catch (e) {
+        this.logger.warn(`DM を開けなかった user=${userId}（同じサーバーにいないと開けない）`, errMessage(e));
+      }
+    }
+    if (this.dmChannels.size === 0 && (this.access.channels ?? []).length === 0) {
+      throw new Error('許可ユーザーの DM を 1 つも開けず、access.json の channels も無い');
+    }
+    return { botUserId: user.id, botTag: user.tag, guildName: guild.name, dmChannelCount: this.dmChannels.size };
+  }
+
+  /** 受信の処理を始める（init() の時点で Gateway にはつながっている。それまでに届いたものは捨てる） */
+  start(handlers: DiscordBridgeEvents): Promise<void> {
+    this.handlers = handlers;
+    return Promise.resolve();
+  }
+
+  async stop(): Promise<void> {
+    this.handlers = undefined;
+    try {
+      await this.client.destroy();
+    } catch (e) {
+      this.logger.warn('Discord の切断に失敗', e);
+    }
+    this.connected = false;
+  }
+
+  private bindListeners(): void {
+    this.client.on(Events.ShardReady, () => {
+      this.connected = true;
+      this.logger.info('gateway: ready');
+    });
+    this.client.on(Events.ShardResume, () => {
+      this.connected = true;
+      this.logger.info('gateway: resumed');
+    });
+    this.client.on(Events.ShardDisconnect, () => {
+      this.connected = false;
+      this.logger.warn('gateway: disconnected');
+    });
+    this.client.on(Events.ShardReconnecting, () => {
+      this.connected = false;
+      this.logger.info('gateway: reconnecting');
+    });
+    this.client.on(Events.Error, (e) => this.logger.error('discord.js のエラー', e));
+    this.client.on(Events.MessageCreate, (message) => this.enqueue(() => this.handleMessage(message)));
+    this.client.on(Events.InteractionCreate, (interaction) => {
+      // ボタンの応答は 3 秒以内に返す必要があるので、列を待たずにすぐ受け取ったことを返す
+      const acked = this.ack(interaction);
+      this.enqueue(async () => {
+        await acked;
+        await this.handleInteraction(interaction);
+      });
+    });
+  }
+
+  /** 受信イベントを 1 本の Promise チェーンに積み、受け取った順に 1 件ずつ処理する */
+  private enqueue(task: () => Promise<void>): void {
+    this.inbound = this.inbound.then(task).catch((e: unknown) => this.logger.error('受信イベントの処理で例外', e));
+  }
+
+  // --- 受信 -----------------------------------------------------------------
+
+  private async handleMessage(message: Message): Promise<void> {
+    if (!this.handlers) return;
+    // 自分の発言は捨てる（送った場所は send() で覚えている）
+    if (message.author.id === this.botUserId) return;
+    const msg = toInbound(message, this.botUserId);
+    const result = gate(msg, this.access, this.botUserId, this.dedupe, this.handlers.isKnownRequest, (t) => this.activeThreads.has(t));
+    if (result.kind !== 'drop') this.rememberSender(msg);
+    await this.handlers.onMessage(result, {
+      channel: conversationOf(msg),
+      ts: msg.messageId,
+      threadTs: threadOf(msg),
+      user: msg.authorId,
+    });
+  }
+
+  /** gate を通った受信から、送信先とメッセージの場所を覚える */
+  private rememberSender(msg: InboundMessage): void {
+    this.locations.set(msg.messageId, msg.channelId);
+    if (msg.kind === 'dm') {
+      if (!this.dmChannels.has(msg.authorId) && this.access.allowFrom.includes(msg.authorId)) {
+        this.dmChannels.set(msg.authorId, msg.channelId);
+        this.allowedConversations.add(msg.channelId);
+        this.logger.info(`受信した DM から送信先を追加 user=${msg.authorId} channel=${msg.channelId}`);
+      }
+      return;
+    }
+    // チャンネルの発言はそのメッセージからスレッドを作るので、その ID を関わったスレッドとして覚える
+    this.activeThreads.set(threadOf(msg), true);
+  }
+
+  private async ack(interaction: Interaction): Promise<void> {
+    if (!interaction.isButton() && !interaction.isStringSelectMenu()) return;
+    try {
+      await interaction.deferUpdate();
+    } catch (e) {
+      this.logger.warn('ボタンの応答に失敗', e);
+    }
+  }
+
+  private async handleInteraction(interaction: Interaction): Promise<void> {
+    if (!this.handlers) return;
+    if (!interaction.isButton() && !interaction.isStringSelectMenu()) return;
+    const channel = interaction.channel;
+    if (!channel) return;
+    const kind = channelKind(channel);
+    const parentId = kind === 'thread' && 'parentId' in channel ? (channel.parentId ?? '') : undefined;
+    const conversationId = kind === 'thread' ? (parentId ?? '') : channel.id;
+    // ボット自身のメッセージのボタンだけを扱う
+    if (interaction.message.author.id !== this.botUserId) return;
+    this.locations.set(interaction.message.id, channel.id);
+
+    const parsed = parseInteraction(
+      {
+        kind: interaction.isButton() ? 'button' : 'select',
+        customId: interaction.customId,
+        values: interaction.isStringSelectMenu() ? interaction.values : undefined,
+        guildId: interaction.guildId ?? null,
+        userId: interaction.user.id,
+        conversationId,
+      },
+      this.access,
+      this.allowedConversations
+    );
+    await this.handlers.onAction(parsed, {
+      userId: interaction.user.id,
+      channelId: conversationId,
+      messageTs: interaction.message.id,
+      threadTs: kind === 'thread' ? channel.id : undefined,
+    });
+  }
+
+  /** そのスレッドにボットが関わっているか */
+  isActiveThread(threadId: string): boolean {
+    return this.activeThreads.has(threadId);
+  }
+
+  // --- 送り先の解決 -----------------------------------------------------------
+
+  private assertAllowed(conversation: string): void {
+    if (!this.allowedConversations.has(conversation)) throw new Error('許可されていない送信先チャンネル');
+  }
+
+  private async sendable(channelId: string): Promise<SendableChannels> {
+    const channel = await this.client.channels.fetch(channelId);
+    if (!channel?.isSendable()) throw new Error(`送信できないチャンネル: ${channelId}`);
+    return channel;
+  }
+
+  /**
+   * 会話と返信先から、実際に送るチャンネルと返信の参照を決める（設計書 D4）。
+   * - DM: そのチャンネルに送り、threadTs のメッセージへの返信にする
+   * - サーバー: threadTs のスレッドがあればそこ、無ければ threadTs のメッセージからスレッドを作る。作れなければ元メッセージへの返信
+   */
+  private async resolveTarget(conversation: string, threadTs: string | undefined): Promise<{ channel: SendableChannels; replyTo?: string }> {
+    const base = await this.sendable(conversation);
+    if (threadTs === undefined) return { channel: base };
+    if (base.type === ChannelType.DM) return { channel: base, replyTo: threadTs };
+    if (base.type !== ChannelType.GuildText && base.type !== ChannelType.GuildAnnouncement) return { channel: base, replyTo: threadTs };
+
+    const existing = await this.client.channels.fetch(threadTs).catch(() => null);
+    if (existing?.isThread() && existing.isSendable()) {
+      this.activeThreads.set(existing.id, true);
+      return { channel: existing };
+    }
+    try {
+      const origin = await base.messages.fetch(threadTs);
+      const thread = origin.thread ?? (await origin.startThread({ name: threadName(origin.content), autoArchiveDuration: 1440 }));
+      this.activeThreads.set(thread.id, true);
+      return { channel: thread };
+    } catch (e) {
+      this.logger.warn(`スレッドを作れなかったので、元のメッセージへの返信にする thread=${threadTs}`, errMessage(e));
+      return { channel: base, replyTo: threadTs };
+    }
+  }
+
+  /** メッセージのあるチャンネル。覚えていなければ、スレッドの中（threadTs があってメッセージと違う）か会話そのもの */
+  private locate(conversation: string, messageId: string, threadTs?: string): string {
+    const known = this.locations.get(messageId);
+    if (known) return known;
+    if (threadTs !== undefined && threadTs !== messageId && !this.dmChannelIds().has(conversation)) return threadTs;
+    return conversation;
+  }
+
+  private dmChannelIds(): Set<string> {
+    return new Set(this.dmChannels.values());
+  }
+
+  private async send(target: { channel: SendableChannels; replyTo?: string }, options: MessageCreateOptions): Promise<Message> {
+    const sent = await target.channel.send({
+      ...options,
+      allowedMentions: NO_MENTIONS,
+      ...(target.replyTo ? { reply: { messageReference: target.replyTo, failIfNotExists: false } } : {}),
+    });
+    this.locations.set(sent.id, sent.channelId);
+    return sent;
+  }
+
+  // --- 送信 -----------------------------------------------------------------
+
+  /**
+   * テキストを送る。許可した会話以外には送らない（投げる）。一斉メンションは無効化し、空なら何も送らない。
+   * 長文は TEXT_CHUNK_MAX ごとに分けて順に送る。途中のチャンクで失敗した場合、1 通以上送れていれば
+   * 例外のメッセージに `sent=N`（送れた件数）を付けて投げる（Claude が再送の範囲を判断できるように）。
+   */
+  async postText(channel: string, text: string, threadTs?: string): Promise<{ ts: string[] }> {
+    this.assertAllowed(channel);
+    const safe = neutralizeBroadcasts(text);
+    const ids: string[] = [];
+    if (safe.trim() === '') return { ts: ids };
+    const target = await this.resolveTarget(channel, threadTs);
+    try {
+      for (const [i, piece] of chunkText(safe, TEXT_CHUNK_MAX).entries()) {
+        // DM で返信の参照を付けるのは最初の 1 通だけ
+        const sent = await this.send(i === 0 ? target : { channel: target.channel }, { content: piece });
+        ids.push(sent.id);
+      }
+    } catch (e) {
+      if (ids.length === 0) throw e;
+      throw new Error(`${errMessage(e)} (sent=${ids.length})`, { cause: e });
+    }
+    return { ts: ids };
+  }
+
+  async postCard(channel: string, card: Card, threadTs?: string): Promise<{ ts: string }> {
+    this.assertAllowed(channel);
+    const target = await this.resolveTarget(channel, threadTs);
+    const { embeds, components } = toDiscord(card);
+    const sent = await this.send(target, { embeds, components });
+    return { ts: sent.id };
+  }
+
+  /** 本文だけに書き換える（edit_message ツール用。カードとボタンは外す） */
+  async updateText(channel: string, ts: string, text: string, threadTs?: string): Promise<void> {
+    this.assertAllowed(channel);
+    await this.edit(this.locate(channel, ts, threadTs), ts, { content: neutralizeBroadcasts(text), embeds: [], components: [] });
+  }
+
+  async updateCard(channel: string, ts: string, card: Card): Promise<void> {
+    this.assertAllowed(channel);
+    const { embeds, components } = toDiscord(card);
+    await this.edit(this.locate(channel, ts), ts, { content: '', embeds, components });
+  }
+
+  private async edit(channelId: string, messageId: string, options: MessageEditOptions): Promise<void> {
+    const channel = await this.sendable(channelId);
+    await channel.messages.edit(messageId, { ...options, allowedMentions: NO_MENTIONS });
+  }
+
+  /** リアクション付与。失敗しても投げない（ログに残す） */
+  async addReaction(channel: string, ts: string, emoji: string, threadTs?: string): Promise<void> {
+    this.assertAllowed(channel);
+    try {
+      const target = await this.sendable(this.locate(channel, ts, threadTs));
+      await target.messages.react(ts, emoji);
+    } catch (e) {
+      this.logger.warn(`リアクションに失敗 emoji=${emoji}`, errMessage(e));
+    }
+  }
+
+  /**
+   * 許可ユーザー全員の DM に送る。threadFor が返信先を返した DM ではそのメッセージへの返信に、
+   * 返さなかった DM ではそのまま投稿する。
+   */
+  async postToAll(content: Card | string, threadFor?: (channel: string) => string | undefined): Promise<{ channel: string; ts: string }[]> {
+    const out: { channel: string; ts: string }[] = [];
+    for (const channel of this.dmChannels.values()) {
+      const threadTs = threadFor?.(channel);
+      try {
+        if (typeof content === 'string') {
+          const res = await this.postText(channel, content, threadTs);
+          out.push({ channel, ts: res.ts[0] ?? '' });
+        } else {
+          const res = await this.postCard(channel, content, threadTs);
+          out.push({ channel, ts: res.ts });
+        }
+      } catch (e) {
+        this.logger.error(`DM への送信に失敗 channel=${channel}`, e);
+      }
+    }
+    return out;
+  }
+
+  // --- 添付 -----------------------------------------------------------------
+
+  /** 添付の情報を引く（URL には期限があるので、毎回メッセージを読み直して新しいものをもらう） */
+  async attachmentInfo(ref: AttachmentRef): Promise<RemoteFile> {
+    this.assertAllowed(ref.chatId);
+    const channel = await this.sendable(this.locate(ref.chatId, ref.messageId, ref.threadId));
+    const message = await channel.messages.fetch({ message: ref.messageId, force: true });
+    const attachment = message.attachments.get(ref.attachmentId);
+    if (!attachment) throw new Error(`そのメッセージに添付が見つからない: ${ref.attachmentId}`);
+    return {
+      id: attachment.id,
+      name: attachment.name,
+      size: attachment.size,
+      mimetype: attachment.contentType ?? undefined,
+      url: attachment.url,
+    };
+  }
+
+  /** 添付を取る。Discord の CDN 以外には取りに行かない（トークンは付けない） */
+  async fetchFile(file: RemoteFile, signal?: AbortSignal): Promise<Response> {
+    const target = new URL(file.url);
+    if (target.protocol !== 'https:' || !CDN_HOSTS.has(target.hostname)) {
+      throw new Error(`Discord の CDN 以外の URL には取りに行かない: ${target.hostname}`);
+    }
+    const res = await this.fetchFn(target, { signal: signal ?? null });
+    if (!res.ok) throw new Error(`ダウンロードに失敗 status=${res.status}`);
+    return res;
+  }
+}
