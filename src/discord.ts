@@ -153,9 +153,23 @@ function channelKind(channel: Channel): ChannelKind {
   }
 }
 
+/**
+ * ボットのロール（招待したときに Discord が自動で作る、ボットと同じ名前のロール）へのメンションを、ボット本人へのメンションに置き換える。
+ * 入力欄のメンションの候補にはボット本人とこのロールの両方が出るので、どちらを選ばれても話しかけられたとみなすため
+ */
+export function normalizeBotRoleMentions(content: string, botRoleIds: readonly string[], botUserId: string): string {
+  let out = content;
+  for (const roleId of botRoleIds) out = out.split(`<@&${roleId}>`).join(`<@${botUserId}>`);
+  return out;
+}
+
 /** Discord の Message を gate 用の InboundMessage に詰め替える */
 export function toInbound(message: Message, botUserId: string | undefined): InboundMessage {
   const kind = channelKind(message.channel);
+  // このボットのロール（tags.botId がボット）へのメンションも、ボットへのメンションとして扱う
+  const botRoleIds =
+    botUserId === undefined ? [] : [...message.mentions.roles.filter((r) => r.tags?.botId === botUserId).keys()];
+  const content = botUserId === undefined ? message.content : normalizeBotRoleMentions(message.content, botRoleIds, botUserId);
   const parentId = kind === 'thread' && 'parentId' in message.channel ? (message.channel.parentId ?? undefined) : undefined;
   return {
     guildId: message.guildId ?? null,
@@ -166,10 +180,11 @@ export function toInbound(message: Message, botUserId: string | undefined): Inbo
     authorId: message.author.id,
     authorIsBot: message.author.bot || message.webhookId !== null,
     isUserMessage: message.type === MessageType.Default || message.type === MessageType.Reply,
-    content: message.content,
+    content,
     mentionsBot:
       botUserId !== undefined &&
-      message.mentions.has(botUserId, { ignoreEveryone: true, ignoreRoles: true, ignoreRepliedUser: true }),
+      (botRoleIds.length > 0 ||
+        message.mentions.has(botUserId, { ignoreEveryone: true, ignoreRoles: true, ignoreRepliedUser: true })),
     repliesToBot: botUserId !== undefined && message.mentions.repliedUser?.id === botUserId,
     createdAt: message.createdAt.toISOString(),
     files:
