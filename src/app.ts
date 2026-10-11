@@ -55,10 +55,10 @@ export type AppServer = Pick<ChannelServer, 'pushMessage'>;
 export type AppRelay = Pick<PermissionRelay, 'answerByText' | 'answerByButton' | 'rememberThread' | 'lookup'>;
 
 /** 無応答の見張りのうち、受信処理が使う操作 */
-export type AppWatchdog = Pick<ResponseWatchdog, 'delivered'>;
+export type AppWatchdog = Pick<ResponseWatchdog, 'delivered' | 'activity'>;
 export type AppScreen = Pick<ScreenRelay, 'show' | 'pick'>;
 export type AppRules = Pick<RuleRelay, 'propose' | 'confirm' | 'list' | 'remove'>;
-export type AppSession = Pick<SessionControl, 'restart' | 'compact' | 'clear'>;
+export type AppSession = Pick<SessionControl, 'restart' | 'compact' | 'clear' | 'interrupt'>;
 
 export interface Wiring {
   bridge: AppBridge;
@@ -83,9 +83,9 @@ export interface Wiring {
 }
 
 /** Claude に渡さず、ブリッジ自身が処理するコマンド（`!restart force` だけ引数を取る） */
-const COMMAND_RE = /^\s*!(help|screen|rules|status|restart(?:\s+force)?|compact|clear|lock)\s*$/i;
+const COMMAND_RE = /^\s*!(help|screen|rules|status|restart(?:\s+force)?|compact|clear|lock|stop)\s*$/i;
 /** COMMAND_RE が受け付けるコマンド（小文字・空白 1 つに正規化した形） */
-const COMMANDS = ['help', 'screen', 'rules', 'status', 'restart', 'restart force', 'compact', 'clear', 'lock'] as const;
+const COMMANDS = ['help', 'screen', 'rules', 'status', 'restart', 'restart force', 'compact', 'clear', 'lock', 'stop'] as const;
 export type Command = (typeof COMMANDS)[number];
 
 function isCommand(name: string): name is Command {
@@ -103,6 +103,7 @@ export const HELP_TEXT = [
   '• `!help` … この一覧',
   '• `!status` … ブリッジの稼働状態',
   '• `!screen` … ターミナルの画面を見る（選択画面なら選択メニューで選べる）',
+  '• `!stop` … Esc を送って、Claude の今の作業を中断する',
   '• `!rules` … Discord から足した許可ルールの一覧と削除',
   '• `!compact` … /compact を送る（会話を要約して縮める）',
   '• `!clear` … /clear を送る（会話を捨てて新しい会話にする）',
@@ -270,7 +271,7 @@ export async function handleMessage(wiring: Wiring, result: GateResult, raw: Inb
 
 /** ブリッジ自身のコマンド。使えない環境ではその旨をスレッドに返す */
 async function handleCommand(
-  { bridge, screen, rules, status, session, sessionAllow, logger }: Wiring,
+  { bridge, screen, rules, status, session, sessionAllow, logger, watchdog }: Wiring,
   command: Command,
   at: ThreadRef,
   byUserId: string
@@ -282,6 +283,18 @@ async function handleCommand(
       return;
     case 'screen':
       await screen.show(at.channel, at.threadTs);
+      return;
+    case 'stop':
+      if (!session) {
+        await unavailable('!stop');
+        return;
+      }
+      if (await session.interrupt(at, byUserId)) {
+        // 中断したので、返事が無いという警告はもう出さない
+        watchdog.activity();
+        const text = '⏹ Esc を送って中断した。次の指示を待っている。ターミナルで確認が開いていた場合は、それも拒否になる';
+        await bridge.postCard(at.channel, noticeCard(text, true, 'muted'), at.threadTs);
+      }
       return;
     case 'rules':
       if (rules) await rules.list(at.channel, at.threadTs);

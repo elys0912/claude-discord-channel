@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /** 送れるキー。自由な文字入力は送らない */
-export type ConsoleKey = 'Up' | 'Down' | 'Enter';
+export type ConsoleKey = 'Up' | 'Down' | 'Enter' | 'Esc';
 /** 送れるスラッシュコマンド（固定。console.ps1 側でも同じ一覧に限っている） */
 export type ConsoleCommand = 'exit' | 'compact' | 'clear';
 
