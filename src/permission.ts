@@ -190,6 +190,8 @@ export const ACTION = {
   RULE_ADD: 'rule:add',
   RULE_CANCEL: 'rule:cancel',
   RULE_REMOVE: 'rule:rm',
+  FILE_OK: 'file:ok',
+  FILE_NO: 'file:no',
 } as const;
 
 type ActionName = (typeof ACTION)[keyof typeof ACTION];
@@ -298,6 +300,8 @@ export type ActionParse =
   | { ok: true; kind: 'rule_confirm'; proposalId: string; accept: boolean }
   /** 許可リストから追加分のルールを消す（listId は一覧を出したときの控え、index はその中の番号） */
   | { ok: true; kind: 'rule_remove'; listId: string; index: number }
+  /** 送ってよい場所の外のファイルを送るかの確認に答える */
+  | { ok: true; kind: 'file_confirm'; confirmId: string; accept: boolean }
   | { ok: false; reason: string };
 
 const CUSTOM_ID_RE = /^([a-z]+:[a-z]+)(?::([a-z0-9]{1,16}))?$/;
@@ -350,6 +354,10 @@ export function parseInteraction(
     case ACTION.RULE_REMOVE:
       if (input.kind !== 'select' || !token || index === undefined) return { ok: false, reason: 'invalid_value' };
       return { ok: true, kind: 'rule_remove', listId: token, index };
+    case ACTION.FILE_OK:
+    case ACTION.FILE_NO:
+      if (!token) return { ok: false, reason: 'invalid_value' };
+      return { ok: true, kind: 'file_confirm', confirmId: token, accept: action === ACTION.FILE_OK };
     default:
       return { ok: false, reason: 'unknown_action' };
   }

@@ -489,6 +489,18 @@ export class DiscordBridge {
     return { ts: sent.id };
   }
 
+  /** ファイルを添付して送る（send_file 用。送ってよいかの判定は send-file.ts が済ませている） */
+  async sendFiles(channel: string, files: { path: string; name: string }[], text?: string, threadTs?: string): Promise<{ ts: string }> {
+    this.assertAllowed(channel);
+    const target = await this.resolveTarget(channel, threadTs);
+    const content = text === undefined ? undefined : chunkText(neutralizeBroadcasts(text), TEXT_CHUNK_MAX)[0];
+    const sent = await this.send(target, {
+      ...(content ? { content } : {}),
+      files: files.map((f) => ({ attachment: f.path, name: f.name })),
+    });
+    return { ts: sent.id };
+  }
+
   /** 本文だけに書き換える（edit_message ツール用。カードとボタンは外す） */
   async updateText(channel: string, ts: string, text: string, threadTs?: string): Promise<void> {
     this.assertAllowed(channel);
