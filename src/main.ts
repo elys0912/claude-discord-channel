@@ -8,6 +8,8 @@ import { errMessage } from './errors.js';
 import { Logger } from './log.js';
 import { InstanceLock, acquireWithRetry, isProcessAlive } from './lock.js';
 import { DiscordBridge } from './discord.js';
+import { DEFAULT_INLINE_LIMITS } from './inline-text.js';
+import type { InlineDeps } from './inline-text.js';
 import { startBridgeApp, startDegradedApp } from './app.js';
 import { replyTimeoutMs } from './watchdog.js';
 import { PowerShellConsole, findConsoleScript } from './console.js';
@@ -114,6 +116,7 @@ async function main(dir: string, logger: Logger): Promise<void> {
     restartFlagFile: path.join(dir, RESTART_FLAG_FILE),
     download: tokens.downloadDir ? { bridge, dir: tokens.downloadDir } : undefined,
     sessionAllowAll: tokens.sessionAllowAll === true,
+    inline: inlineDeps(bridge, logger, tokens.inlineTextMaxKb),
     // 起動スクリプトは作業フォルダーで claude.exe を起動し、MCP サーバーも同じ作業フォルダーで動く。
     // channel セッションの設定ファイルは -SettingsFile で替えられるので、起動スクリプトが渡した場所を優先する
     denyFiles: [
@@ -122,6 +125,14 @@ async function main(dir: string, logger: Logger): Promise<void> {
       path.join(process.cwd(), '.claude', 'settings.local.json'),
     ],
   });
+}
+
+/** テキストの添付を本文に差し込む設定。.env の INLINE_TEXT_MAX_KB が 0 なら差し込まない（省略時は既定の上限） */
+function inlineDeps(bridge: DiscordBridge, logger: Logger, maxKb: number | undefined): InlineDeps | undefined {
+  if (maxKb === 0) return undefined;
+  if (maxKb === undefined) return { bridge, logger };
+  const maxFileBytes = maxKb * 1024;
+  return { bridge, logger, limits: { ...DEFAULT_INLINE_LIMITS, maxFileBytes, maxTotalBytes: Math.max(maxFileBytes, DEFAULT_INLINE_LIMITS.maxTotalBytes) } };
 }
 
 /** 画面の読み取りに使う console.ps1 が見つかれば、その実装を返す。Windows 以外・見つからなければ undefined */
