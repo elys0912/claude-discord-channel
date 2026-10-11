@@ -1,4 +1,5 @@
 // hook のイベントを Discord に出す文言に変える純関数（I/O なし）。出さないものは undefined
+import type { CardColor } from './card.js';
 import type { HookEvent } from './hook-event.js';
 
 export interface NoticeContext {
@@ -12,6 +13,8 @@ export interface HookNotice {
   text: string;
   /** 「🖥 画面を確認」ボタンを付ける（ターミナル側で止まっているとき） */
   screenButton: boolean;
+  /** お知らせの色（エラー: error、対応が要るかも: warn、終了: muted、開始: ok、それ以外: info） */
+  color: CardColor;
 }
 
 const TERMINAL_WAITING = '🖥 ターミナル側で入力待ちになっている（Discord には中継されない）。画面を確認して選ぶこと。';
@@ -33,21 +36,21 @@ export function hookToNotice(event: HookEvent, ctx: NoticeContext): HookNotice |
       return notificationNotice(event, ctx);
     case 'Stop':
       // 返事（reply ツール）無しで応答が終わった。無応答の見張りより早く知らせる
-      return ctx.waiting ? { text: '⚠️ Discord に返事をしないまま応答が終わった。ターミナル側で止まっているかもしれない。', screenButton: true } : undefined;
+      return ctx.waiting ? { text: '⚠️ Discord に返事をしないまま応答が終わった。ターミナル側で止まっているかもしれない。', screenButton: true, color: 'warn' } : undefined;
     case 'StopFailure': {
       const code = event.error ?? 'unknown';
       const detail = STOP_FAILURE_TEXT[code] ?? `エラーで止まった（${code}）`;
       const extra = event.error_details ? `\n${event.error_details}` : '';
-      return { text: `⛔ ${detail}${extra}`, screenButton: false };
+      return { text: `⛔ ${detail}${extra}`, screenButton: false, color: 'error' };
     }
     case 'PostCompact':
-      return { text: event.trigger === 'auto' ? '🧹 会話が長くなったので自動で圧縮した' : '🧹 会話を圧縮した', screenButton: false };
+      return { text: event.trigger === 'auto' ? '🧹 会話が長くなったので自動で圧縮した' : '🧹 会話を圧縮した', screenButton: false, color: 'info' };
     case 'SessionStart':
       return sessionStartNotice(event);
     case 'SessionEnd':
       // /clear では SessionEnd（reason=clear）の直後に SessionStart（source=clear）が来て「会話をクリアした」を出すので、終了は出さない
       if (event.reason === 'clear') return undefined;
-      return { text: `🛑 Claude Code のセッションが終了した（${event.reason ?? '理由不明'}）`, screenButton: false };
+      return { text: `🛑 Claude Code のセッションが終了した（${event.reason ?? '理由不明'}）`, screenButton: false, color: 'muted' };
     default:
       return undefined;
   }
@@ -57,17 +60,17 @@ function notificationNotice(event: HookEvent, ctx: NoticeContext): HookNotice | 
   const type = event.notification_type ?? '';
   if (type === 'permission_prompt') {
     // Discord に中継した許可でもターミナル側に同じ確認が出るので、中継中（pending）なら黙る
-    return ctx.pending === 0 ? { text: `🔐 ${TERMINAL_WAITING}`, screenButton: true } : undefined;
+    return ctx.pending === 0 ? { text: `🔐 ${TERMINAL_WAITING}`, screenButton: true, color: 'warn' } : undefined;
   }
   if (type.startsWith('elicitation_') || type === 'agent_needs_input') {
-    return { text: TERMINAL_WAITING, screenButton: true };
+    return { text: TERMINAL_WAITING, screenButton: true, color: 'warn' };
   }
   if (type === 'idle_prompt') {
     // 応答のたびに鳴るので、Discord に返事が無いときだけ
-    return ctx.waiting ? { text: '⏳ Claude が入力待ちのまま止まっている。' + (event.message ?? ''), screenButton: true } : undefined;
+    return ctx.waiting ? { text: '⏳ Claude が入力待ちのまま止まっている。' + (event.message ?? ''), screenButton: true, color: 'warn' } : undefined;
   }
   if (type.startsWith('quota_auto_resume_')) {
-    return { text: `⏱ ${event.message ?? type}`, screenButton: false };
+    return { text: `⏱ ${event.message ?? type}`, screenButton: false, color: 'warn' };
   }
   return undefined;
 }
@@ -75,14 +78,14 @@ function notificationNotice(event: HookEvent, ctx: NoticeContext): HookNotice | 
 function sessionStartNotice(event: HookEvent): HookNotice | undefined {
   switch (event.source) {
     case 'clear':
-      return { text: '🧹 会話をクリアした（新しい会話）', screenButton: false };
+      return { text: '🧹 会話をクリアした（新しい会話）', screenButton: false, color: 'info' };
     case 'compact':
       return undefined; // PostCompact で出す
     case 'startup':
     case 'resume':
     case 'fork':
     case undefined:
-      return { text: `🟢 Claude Code のセッションを開始した${event.cwd ? `: ${event.cwd}` : ''}`, screenButton: false };
+      return { text: `🟢 Claude Code のセッションを開始した${event.cwd ? `: ${event.cwd}` : ''}`, screenButton: false, color: 'ok' };
     default:
       return undefined;
   }

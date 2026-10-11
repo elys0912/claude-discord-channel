@@ -674,7 +674,7 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
           const found = hookToNotice(event, { waiting: watchdog.isWaiting(), pending: relay.pendingCount() });
           if (!found) return;
           logger.info(`hook を知らせる event=${event.hook_event_name} type=${event.notification_type ?? '-'}`);
-          await notice.post(found.text, noticeCard(found.text, found.screenButton && opts.console !== undefined));
+          await notice.post(found.text, noticeCard(found.text, found.screenButton && opts.console !== undefined, found.color));
         },
       })
     : undefined;
