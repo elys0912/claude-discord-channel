@@ -173,7 +173,7 @@ export function createToolHandlers(
     onReply: ({ chat_id, text, thread_id }) =>
       run('reply', async () => {
         const res = await bridge.postText(chat_id, text, thread_id);
-        return `sent (${res.ts.length} message(s))`;
+        return res.asFile ? 'sent (冒頭を本文に、全文を reply.md として添付した)' : `sent (${res.ts.length} message(s))`;
       }),
 
     onReact: ({ chat_id, message_id, emoji, thread_id }) =>

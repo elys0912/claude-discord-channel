@@ -28,6 +28,7 @@ import { neutralizeBroadcasts } from './format.js';
 import { EventDedupe, conversationOf, gate, threadOf } from './gate.js';
 import type { ChannelKind, GateResult, InboundMessage } from './gate.js';
 import type { Logger } from './log.js';
+import { DEFAULT_LONG_REPLY_CHARS, toLongReply } from './long-reply.js';
 import { parseInteraction } from './permission.js';
 import type { ActionParse } from './permission.js';
 
@@ -106,6 +107,8 @@ export interface DiscordDeps {
   logger: Logger;
   /** テスト用の差し替え口（省略時はグローバルの fetch。添付のダウンロードに使う） */
   fetch?: typeof fetch;
+  /** これを超える返信は冒頭と全文の添付にする（.env の LONG_REPLY_CHARS。0 なら分けて送る） */
+  longReplyChars?: number | undefined;
 }
 
 /** 古いものから忘れる、大きさに上限のある Map */
@@ -184,6 +187,7 @@ export class DiscordBridge {
   private readonly logger: Logger;
   private readonly token: string;
   private readonly fetchFn: typeof fetch;
+  private readonly longReplyChars: number;
   private readonly client: Client;
   private readonly dedupe = new EventDedupe();
   /** 許可ユーザー → DM のチャンネル */
@@ -206,6 +210,7 @@ export class DiscordBridge {
     this.logger = deps.logger;
     this.token = deps.token;
     this.fetchFn = deps.fetch ?? fetch;
+    this.longReplyChars = deps.longReplyChars ?? DEFAULT_LONG_REPLY_CHARS;
     for (const channel of deps.access.channels ?? []) this.allowedConversations.add(channel);
     this.client = new Client({
       intents: [
@@ -462,12 +467,18 @@ export class DiscordBridge {
    * 長文は TEXT_CHUNK_MAX ごとに分けて順に送る。途中のチャンクで失敗した場合、1 通以上送れていれば
    * 例外のメッセージに `sent=N`（送れた件数）を付けて投げる（Claude が再送の範囲を判断できるように）。
    */
-  async postText(channel: string, text: string, threadTs?: string): Promise<{ ts: string[] }> {
+  async postText(channel: string, text: string, threadTs?: string): Promise<{ ts: string[]; asFile?: boolean }> {
     this.assertAllowed(channel);
     const safe = neutralizeBroadcasts(text);
     const ids: string[] = [];
     if (safe.trim() === '') return { ts: ids };
     const target = await this.resolveTarget(channel, threadTs);
+    // 長い返信は、冒頭だけを本文にして全文を添付する
+    const long = toLongReply(safe, this.longReplyChars);
+    if (long) {
+      const sent = await this.send(target, { content: long.content, files: [{ attachment: long.file, name: long.name }] });
+      return { ts: [sent.id], asFile: true };
+    }
     try {
       for (const [i, piece] of chunkText(safe, TEXT_CHUNK_MAX).entries()) {
         // DM で返信の参照を付けるのは最初の 1 通だけ
