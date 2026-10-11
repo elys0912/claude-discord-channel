@@ -4,6 +4,7 @@
 // - 返信先（threadTs）: サーバーではそのメッセージから作るスレッド（スレッドの ID は元メッセージの ID と同じ）、
 //   DM ではそのメッセージへの返信。スレッドの中のメッセージを後で書き換えられるよう、メッセージのある場所を覚えておく
 import {
+  ActivityType,
   ChannelType,
   Client,
   Events,
@@ -30,6 +31,8 @@ import type { ChannelKind, GateResult, InboundMessage } from './gate.js';
 import type { Logger } from './log.js';
 import { DEFAULT_LONG_REPLY_CHARS, toLongReply } from './long-reply.js';
 import { parseInteraction } from './permission.js';
+import { PRESENCE_VIEW } from './presence.js';
+import type { PresenceState } from './presence.js';
 import type { ActionParse } from './permission.js';
 
 /** 1 通の上限（2000 字）に、コードブロックを閉じ直す分の余裕を持たせる */
@@ -498,6 +501,15 @@ export class DiscordBridge {
     const { embeds, components } = toDiscord(card);
     const sent = await this.send(target, { embeds, components });
     return { ts: sent.id };
+  }
+
+  /** ボットのステータス表示を変える（状態ごとの表示は presence.ts） */
+  setPresence(state: PresenceState): void {
+    const view = PRESENCE_VIEW[state];
+    this.client.user?.setPresence({
+      status: view.status,
+      activities: [{ name: view.text, state: view.text, type: ActivityType.Custom }],
+    });
   }
 
   /** 返信先に「入力中…」を出す（約 10 秒で消える） */
