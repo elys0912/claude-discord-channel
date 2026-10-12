@@ -68,7 +68,7 @@ GitHub Actions などの CI が Discord の webhook で結果を投稿すると�
            TEXT: "CI ${{ job.status }}: ${{ github.repository }} (${{ github.ref_name }}) ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
          run: jq -n --arg content "$TEXT" '{content: $content}' | curl -sS -H 'Content-Type: application/json' -d @- "$DISCORD_WEBHOOK"
    ```
-   CI のワークフローに手を入れたくないときは、別のワークフローを `workflow_run` で CI の完了に合わせて動かす。このリポジトリでは [.github/workflows/notify.yml](../.github/workflows/notify.yml) がそれで、マトリクスの全ジョブが終わってから1回だけ知らせる。取り消された実行は知らせない。
+   CI のワークフローに手を入れたくないときは、別のワークフローを `workflow_run` で CI の完了に合わせて動かす。このリポジトリでは [.github/workflows/notify.yml](../.github/workflows/notify.yml) がそれで、マトリクスの全ジョブが終わってから1回だけ知らせる。知らせるたびに Claude が1ターン使うので、知らせるのは main への push の結果（成功も失敗も）と PR の失敗だけにしている。取り消された実行と、フォークからの PR（タイトルなどの外の人が書いた文が Claude に届く）は知らせない。
 
 - 渡すのは、`channels` のチャンネル（とその中のスレッド）への投稿だけ。メンションは要らない。DM や許可していないチャンネルへの投稿は渡さない。
 - 本文と embed（見出し・URL・本文・項目・注記）の文字を合わせ、「CI の通知」の印を付けて `kind="ci"` で渡す。中身はデータとして扱い、結果を短く伝えるよう、MCP の instructions で指示してある。直す作業や push は、利用者が頼んでから行う。
