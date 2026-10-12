@@ -116,6 +116,7 @@ async function main(dir: string, logger: Logger): Promise<void> {
     restartFlagFile: path.join(dir, RESTART_FLAG_FILE),
     download: tokens.downloadDir ? { bridge, dir: tokens.downloadDir } : undefined,
     sessionAllowAll: tokens.sessionAllowAll === true,
+    todoProgress: tokens.todoProgress,
     inline: inlineDeps(bridge, logger, tokens.inlineTextMaxKb),
     keepalive: {
       enabled: tokens.keepalive.enabled && tokens.keepalive.max > 0,
