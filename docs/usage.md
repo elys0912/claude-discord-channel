@@ -50,6 +50,30 @@ Claude Code 自体の挙動（設定の効き方、ダイアログなど）に�
 - 添付は、ふつうのメッセージと同じく要約と ID を渡し、テキストの添付は本文に差し込む。
 - 使える人と場所は `!` のコマンドと同じ。許可外なら、本人にだけ見える返事で断る。
 
+## CI の通知を Claude に渡す
+
+GitHub Actions などの CI が Discord の webhook で結果を投稿すると、その投稿を Claude に渡せる。ふつう webhook の投稿は無視するが、`access.json` の `ciWebhooks` に書いた webhook のものだけは渡す。
+
+1. Discord で `channels` に書いたチャンネルの **チャンネルの編集** → **連携サービス** → **ウェブフック** で webhook を作り、**ウェブフック URL をコピー** する。URL は `https://discord.com/api/webhooks/<webhook の ID>/<トークン>` の形。
+2. `access.json` の `ciWebhooks` に webhook の ID（URL の数字の部分）を書き、ブリッジを起動し直す。
+   ```json
+   { "guildId": "...", "allowFrom": ["..."], "channels": ["..."], "ciWebhooks": ["<webhook の ID>"] }
+   ```
+3. GitHub のリポジトリの **Settings** → **Secrets and variables** → **Actions** に、URL 全体を `DISCORD_CI_WEBHOOK` として登録し、ワークフローの最後に知らせるステップを足す。
+   ```yaml
+       - name: Discord に知らせる
+         if: always()
+         env:
+           DISCORD_WEBHOOK: ${{ secrets.DISCORD_CI_WEBHOOK }}
+           TEXT: "CI ${{ job.status }}: ${{ github.repository }} (${{ github.ref_name }}) ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+         run: jq -n --arg content "$TEXT" '{content: $content}' | curl -sS -H 'Content-Type: application/json' -d @- "$DISCORD_WEBHOOK"
+   ```
+
+- 渡すのは、`channels` のチャンネル（とその中のスレッド）への投稿だけ。メンションは要らない。DM や許可していないチャンネルへの投稿は渡さない。
+- 本文と embed（見出し・URL・本文・項目・注記）の文字を合わせ、「CI の通知」の印を付けて `kind="ci"` で渡す。中身はデータとして扱い、結果を短く伝えるよう、MCP の instructions で指示してある。直す作業や push は、利用者が頼んでから行う。
+- 投稿には 👀 を付け、Claude の返事はその投稿から作るスレッドに届く。
+- webhook の URL にはトークンが入っている。URL が漏れると、誰でも CI の通知のふりをして Claude に文を渡せる。URL は GitHub の Secrets にだけ置き、漏れたら Discord で webhook を消して作り直す。
+
 ## 入力中の表示とボットのステータス
 
 - Claude にメッセージを渡してから応答が終わるまで、返信先に「入力中…」を出す。8秒ごとに出し直し、15分で打ち切る。
