@@ -1,0 +1,43 @@
+name: CI の結果を Discord に知らせる
+
+# CI が終わったら、その結果を Discord の webhook に投稿する。
+# ブリッジは access.json の ciWebhooks に書いた webhook の投稿を、CI の通知として Claude に渡す（docs/usage.md）。
+# webhook の URL はリポジトリの Secrets の DISCORD_CI_WEBHOOK に置く。無ければ何もしない
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  notify:
+    # 取り消された実行（concurrency で新しい push に置き換えられたもの）は知らせない
+    if: github.event.workflow_run.conclusion != 'cancelled' && github.event.workflow_run.conclusion != 'skipped'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Discord に知らせる
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_CI_WEBHOOK }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          EVENT: ${{ github.event.workflow_run.event }}
+          TITLE: ${{ github.event.workflow_run.display_title }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "DISCORD_CI_WEBHOOK が無いので知らせない"
+            exit 0
+          fi
+          case "$CONCLUSION" in
+            success) MARK='✅' ;;
+            failure) MARK='❌' ;;
+            *) MARK='⚠️' ;;
+          esac
+          TEXT="$MARK CI $CONCLUSION: $REPO ($BRANCH, $EVENT)
+          $TITLE
+          $RUN_URL"
+          # 一斉メンションなどが混ざっても通知しない
+          jq -n --arg content "$TEXT" '{content: $content, allowed_mentions: {parse: []}}' |
+            curl -sS --fail-with-body -H 'Content-Type: application/json' -d @- "$DISCORD_WEBHOOK"
