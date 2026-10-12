@@ -3,8 +3,9 @@ import { ChannelType } from 'discord.js';
 import { DiscordBridge, embedText, normalizeBotRoleMentions } from '../src/discord.js';
 import { Logger } from '../src/log.js';
 
-const BOT = '1558801069306282134';
-const ROLE = '1558801938114547905';
+// 実在しない、形だけを合わせた ID（Discord の snowflake と同じ 19 桁）
+const BOT = '1400000000000000001';
+const ROLE = '1400000000000000002';
 
 describe('normalizeBotRoleMentions', () => {
   it('ボットのロールへのメンションを、ボット本人へのメンションに置き換える（何か所あっても）', () => {
