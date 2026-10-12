@@ -93,10 +93,12 @@ async function main(): Promise<void> {
         console.log(`${channelId}: このサーバーのチャンネルとして見つからない`);
         continue;
       }
-      if (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.GuildAnnouncement) {
-        console.log(`${channelId}: テキストチャンネルではない（種類=${ChannelType[channel.type]}）`);
+      const isForum = channel.type === ChannelType.GuildForum;
+      if (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.GuildAnnouncement && !isForum) {
+        console.log(`${channelId}: テキストチャンネルでもフォーラムでもない（種類=${ChannelType[channel.type]}）`);
         continue;
       }
+      if (isForum) console.log(`${channelId}: フォーラム。投稿（スレッド）の中でボットにメンションして話しかける`);
       const perms = channel.permissionsFor(me);
       const missing = CHANNEL_PERMISSIONS.filter(([, flag]) => !perms.has(flag)).map(([name]) => name);
       console.log(`${channelId}: #${channel.name} ${missing.length === 0 ? '権限 OK' : `足りない権限: ${missing.join('、')}`}`);
