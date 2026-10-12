@@ -1395,3 +1395,59 @@ describe('キャッシュのつなぎ止め', () => {
     }
   });
 });
+
+describe('スラッシュコマンド', () => {
+  let h: Harness;
+  let commands: string[];
+
+  beforeEach(async () => {
+    commands = [];
+    h = await startHarness({ ...ACCESS, channels: [CH] }, undefined, {
+      console: { read: async () => '❯ ', sendKeys: async () => undefined, sendCommand: async (c) => void commands.push(c) },
+      restartFlagFile: path.join(os.tmpdir(), `slash-${Math.random().toString(36).slice(2)}.flag`),
+      workDir: 'C:\\dev\\app',
+    });
+  });
+
+  afterEach(async () => {
+    await h.client.close();
+    await h.stop();
+  });
+
+  it('/status は使ったことを一言残し、その一言への返信として状態を返す（Claude には渡さない）', async () => {
+    await h.discord.slash('status');
+    await flush();
+
+    const [echo, status] = h.discord.of('postText');
+    expect(echo).toMatchObject({ channel: DM1, text: '⌨️ `/status`' });
+    expect(status).toMatchObject({ channel: DM1, threadTs: echo?.ts });
+    expect(status?.text).toContain('ブリッジの状態');
+    expect(channelMessages(h)).toEqual([]);
+  });
+
+  it('チャンネルのスレッドの中で使えば、そのスレッドに返す', async () => {
+    await h.discord.slash('help', { conversation: CH, thread: '3700' });
+    await flush();
+    expect(h.discord.of('postText').map((p) => [p.channel, p.threadTs])).toEqual([
+      [CH, '3700'],
+      [CH, '3700'],
+    ]);
+  });
+
+  it('/compact と /keepalive などは ! のコマンドと同じに動く', async () => {
+    await h.discord.slash('compact');
+    await h.discord.slash('keepalive', { mode: 'off' });
+    await flush();
+    expect(commands).toEqual(['compact']);
+    // つなぎ止めの無いブリッジなので、!keepalive off と同じく使えない旨を返す
+    expect(h.discord.texts()).toContain('⚠️ このブリッジでは !keepalive を使えない');
+  });
+
+  it('許可外の人・場所では何もせず、本人にだけ使えない旨を返す', async () => {
+    await h.discord.slash('status', { user: STRANGER });
+    await h.discord.slash('status', { conversation: '399999999999999999' });
+    await flush();
+    expect(h.discord.ephemeral).toEqual(['user_not_allowed', 'channel_not_allowed']);
+    expect(h.discord.calls).toEqual([]);
+  });
+});

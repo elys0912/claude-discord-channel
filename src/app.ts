@@ -127,7 +127,7 @@ export const KEEPALIVE_TEXT = 'keepalive（キャッシュのつなぎ止め。�
 
 /** `!help` の文面 */
 export const HELP_TEXT = [
-  '📖 ブリッジのコマンド（Claude には渡さず、ブリッジが処理する。Claude が止まっていても使える）',
+  '📖 ブリッジのコマンド（Claude には渡さず、ブリッジが処理する。Claude が止まっていても使える。`!` の代わりに `/` で始めると、補完から選べる）',
   '• `!help` … この一覧',
   '• `!status` … ブリッジの稼働状態',
   '• `!screen` … ターミナルの画面を見る（選択画面なら選択メニューで選べる）',
@@ -381,6 +381,16 @@ async function handleCommand(
     default:
       assertNever(command);
   }
+}
+
+/**
+ * スラッシュコマンドが使われたとき（discord.ts で検証済み）。返信先は、使ったことを残した一言（スレッドの中ならそのスレッド）。
+ * 処理は `!` のコマンドと同じ
+ */
+export async function handleSlashCommand(wiring: Wiring, command: Command, ctx: ActionContext): Promise<void> {
+  const at = pressedMessage(ctx);
+  if (!at) return;
+  await handleCommand(wiring, command, { channel: at.channel, threadTs: at.threadTs }, ctx.userId ?? '');
 }
 
 /** permission request のボタン（Allow / Deny / See more）が押されたとき */
@@ -756,6 +766,7 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
     await bridge.start({
       onMessage: (result, raw) => handleMessage(wiring, result, raw),
       onAction: (parsed, ctx) => handleAction(wiring, parsed, ctx),
+      onCommand: (command, ctx) => handleSlashCommand(wiring, command, ctx),
       isKnownRequest: (id) => relay.lookup(id) !== undefined,
     });
   } catch (e) {
