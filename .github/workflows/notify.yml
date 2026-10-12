@@ -12,8 +12,15 @@ permissions: {}
 
 jobs:
   notify:
+    # 知らせるのは、main への push の結果（成功も失敗も）と、PR の失敗だけ。知らせるたびに Claude が 1 ターン使うため
     # 取り消された実行（concurrency で新しい push に置き換えられたもの）は知らせない
-    if: github.event.workflow_run.conclusion != 'cancelled' && github.event.workflow_run.conclusion != 'skipped'
+    # フォークからの PR は知らせない。PR のタイトルなど、外の人が書いた文が Claude に届くため
+    if: >-
+      github.event.workflow_run.conclusion != 'cancelled' &&
+      github.event.workflow_run.conclusion != 'skipped' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      ((github.event.workflow_run.event == 'push' && github.event.workflow_run.head_branch == github.event.repository.default_branch) ||
+       github.event.workflow_run.conclusion == 'failure')
     runs-on: ubuntu-latest
     steps:
       - name: Discord に知らせる
@@ -26,6 +33,8 @@ jobs:
           TITLE: ${{ github.event.workflow_run.display_title }}
           RUN_URL: ${{ github.event.workflow_run.html_url }}
         run: |
+          # 登録のしかたで混ざった空白と改行を落とす（混ざると curl が URL を受け付けない）
+          DISCORD_WEBHOOK=$(printf '%s' "$DISCORD_WEBHOOK" | tr -d '[:space:]')
           if [ -z "$DISCORD_WEBHOOK" ]; then
             echo "DISCORD_CI_WEBHOOK が無いので知らせない"
             exit 0
