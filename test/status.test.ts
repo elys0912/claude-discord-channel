@@ -26,6 +26,15 @@ describe('buildStatusText', () => {
     expect(text).toContain('10:21 StopFailure (rate_limit)');
   });
 
+  it('キャッシュのつなぎ止めの状態を書く（機能が無ければ書かない）', () => {
+    const base = { startedAt: now, workDir: '', discordConnected: true, waitingSince: undefined, pendingPermissions: 0, lastHooks: [], now };
+    expect(buildStatusText({ ...base, keepalive: { enabled: true, nextAt: new Date(2026, 9, 1, 11, 25), sent: 1, max: 6 } })).toContain(
+      'キャッシュのつなぎ止め: 有効（次は 2026-10-01 11:25、送った回数 1/6）'
+    );
+    expect(buildStatusText({ ...base, keepalive: { enabled: false, nextAt: undefined, sent: 0, max: 6 } })).toContain('無効');
+    expect(buildStatusText(base)).not.toContain('つなぎ止め');
+  });
+
   it('待っていない・hook 無し・接続不明も書ける', () => {
     const text = buildStatusText({
       startedAt: now,

@@ -4,6 +4,7 @@
 // - 返信先（threadTs）: サーバーではそのメッセージから作るスレッド（スレッドの ID は元メッセージの ID と同じ）、
 //   DM ではそのメッセージへの返信。スレッドの中のメッセージを後で書き換えられるよう、メッセージのある場所を覚えておく
 import {
+  ActivityType,
   ChannelType,
   Client,
   Events,
@@ -28,7 +29,10 @@ import { neutralizeBroadcasts } from './format.js';
 import { EventDedupe, conversationOf, gate, threadOf } from './gate.js';
 import type { ChannelKind, GateResult, InboundMessage } from './gate.js';
 import type { Logger } from './log.js';
+import { DEFAULT_LONG_REPLY_CHARS, toLongReply } from './long-reply.js';
 import { parseInteraction } from './permission.js';
+import { PRESENCE_VIEW } from './presence.js';
+import type { PresenceState } from './presence.js';
 import type { ActionParse } from './permission.js';
 
 /** 1 通の上限（2000 字）に、コードブロックを閉じ直す分の余裕を持たせる */
@@ -106,6 +110,8 @@ export interface DiscordDeps {
   logger: Logger;
   /** テスト用の差し替え口（省略時はグローバルの fetch。添付のダウンロードに使う） */
   fetch?: typeof fetch;
+  /** これを超える返信は冒頭と全文の添付にする（.env の LONG_REPLY_CHARS。0 なら分けて送る） */
+  longReplyChars?: number | undefined;
 }
 
 /** 古いものから忘れる、大きさに上限のある Map */
@@ -147,9 +153,23 @@ function channelKind(channel: Channel): ChannelKind {
   }
 }
 
+/**
+ * ボットのロール（招待したときに Discord が自動で作る、ボットと同じ名前のロール）へのメンションを、ボット本人へのメンションに置き換える。
+ * 入力欄のメンションの候補にはボット本人とこのロールの両方が出るので、どちらを選ばれても話しかけられたとみなすため
+ */
+export function normalizeBotRoleMentions(content: string, botRoleIds: readonly string[], botUserId: string): string {
+  let out = content;
+  for (const roleId of botRoleIds) out = out.split(`<@&${roleId}>`).join(`<@${botUserId}>`);
+  return out;
+}
+
 /** Discord の Message を gate 用の InboundMessage に詰め替える */
 export function toInbound(message: Message, botUserId: string | undefined): InboundMessage {
   const kind = channelKind(message.channel);
+  // このボットのロール（tags.botId がボット）へのメンションも、ボットへのメンションとして扱う
+  const botRoleIds =
+    botUserId === undefined ? [] : [...message.mentions.roles.filter((r) => r.tags?.botId === botUserId).keys()];
+  const content = botUserId === undefined ? message.content : normalizeBotRoleMentions(message.content, botRoleIds, botUserId);
   const parentId = kind === 'thread' && 'parentId' in message.channel ? (message.channel.parentId ?? undefined) : undefined;
   return {
     guildId: message.guildId ?? null,
@@ -160,10 +180,11 @@ export function toInbound(message: Message, botUserId: string | undefined): Inbo
     authorId: message.author.id,
     authorIsBot: message.author.bot || message.webhookId !== null,
     isUserMessage: message.type === MessageType.Default || message.type === MessageType.Reply,
-    content: message.content,
+    content,
     mentionsBot:
       botUserId !== undefined &&
-      message.mentions.has(botUserId, { ignoreEveryone: true, ignoreRoles: true, ignoreRepliedUser: true }),
+      (botRoleIds.length > 0 ||
+        message.mentions.has(botUserId, { ignoreEveryone: true, ignoreRoles: true, ignoreRepliedUser: true })),
     repliesToBot: botUserId !== undefined && message.mentions.repliedUser?.id === botUserId,
     createdAt: message.createdAt.toISOString(),
     files:
@@ -184,6 +205,7 @@ export class DiscordBridge {
   private readonly logger: Logger;
   private readonly token: string;
   private readonly fetchFn: typeof fetch;
+  private readonly longReplyChars: number;
   private readonly client: Client;
   private readonly dedupe = new EventDedupe();
   /** 許可ユーザー → DM のチャンネル */
@@ -206,6 +228,7 @@ export class DiscordBridge {
     this.logger = deps.logger;
     this.token = deps.token;
     this.fetchFn = deps.fetch ?? fetch;
+    this.longReplyChars = deps.longReplyChars ?? DEFAULT_LONG_REPLY_CHARS;
     for (const channel of deps.access.channels ?? []) this.allowedConversations.add(channel);
     this.client = new Client({
       intents: [
@@ -462,12 +485,18 @@ export class DiscordBridge {
    * 長文は TEXT_CHUNK_MAX ごとに分けて順に送る。途中のチャンクで失敗した場合、1 通以上送れていれば
    * 例外のメッセージに `sent=N`（送れた件数）を付けて投げる（Claude が再送の範囲を判断できるように）。
    */
-  async postText(channel: string, text: string, threadTs?: string): Promise<{ ts: string[] }> {
+  async postText(channel: string, text: string, threadTs?: string): Promise<{ ts: string[]; asFile?: boolean }> {
     this.assertAllowed(channel);
     const safe = neutralizeBroadcasts(text);
     const ids: string[] = [];
     if (safe.trim() === '') return { ts: ids };
     const target = await this.resolveTarget(channel, threadTs);
+    // 長い返信は、冒頭だけを本文にして全文を添付する
+    const long = toLongReply(safe, this.longReplyChars);
+    if (long) {
+      const sent = await this.send(target, { content: long.content, files: [{ attachment: long.file, name: long.name }] });
+      return { ts: [sent.id], asFile: true };
+    }
     try {
       for (const [i, piece] of chunkText(safe, TEXT_CHUNK_MAX).entries()) {
         // DM で返信の参照を付けるのは最初の 1 通だけ
@@ -486,6 +515,34 @@ export class DiscordBridge {
     const target = await this.resolveTarget(channel, threadTs);
     const { embeds, components } = toDiscord(card);
     const sent = await this.send(target, { embeds, components });
+    return { ts: sent.id };
+  }
+
+  /** ボットのステータス表示を変える（状態ごとの表示は presence.ts） */
+  setPresence(state: PresenceState): void {
+    const view = PRESENCE_VIEW[state];
+    this.client.user?.setPresence({
+      status: view.status,
+      activities: [{ name: view.text, state: view.text, type: ActivityType.Custom }],
+    });
+  }
+
+  /** 返信先に「入力中…」を出す（約 10 秒で消える） */
+  async sendTyping(channel: string, threadTs?: string): Promise<void> {
+    this.assertAllowed(channel);
+    const target = await this.resolveTarget(channel, threadTs);
+    await target.channel.sendTyping();
+  }
+
+  /** ファイルを添付して送る（send_file 用。送ってよいかの判定は send-file.ts が済ませている） */
+  async sendFiles(channel: string, files: { path: string; name: string }[], text?: string, threadTs?: string): Promise<{ ts: string }> {
+    this.assertAllowed(channel);
+    const target = await this.resolveTarget(channel, threadTs);
+    const content = text === undefined ? undefined : chunkText(neutralizeBroadcasts(text), TEXT_CHUNK_MAX)[0];
+    const sent = await this.send(target, {
+      ...(content ? { content } : {}),
+      files: files.map((f) => ({ attachment: f.path, name: f.name })),
+    });
     return { ts: sent.id };
   }
 

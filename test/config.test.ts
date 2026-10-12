@@ -103,7 +103,21 @@ describe('loadTokens', () => {
 
   it('正常系: ボットのトークンを読み込める', () => {
     write(`DISCORD_BOT_TOKEN=${TOKEN}\n`);
-    expect(loadTokens(dir)).toEqual({ botToken: TOKEN });
+    expect(loadTokens(dir)).toEqual({
+      botToken: TOKEN,
+      keepalive: { enabled: true, afterMin: 55, max: 6, quiet: { start: 60, end: 420 } },
+    });
+  });
+
+  it('KEEPALIVE の設定を読み、off・時間帯なし・範囲外を扱う', () => {
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nKEEPALIVE=off\nKEEPALIVE_AFTER_MIN=50\nKEEPALIVE_MAX=3\nKEEPALIVE_QUIET=\n`);
+    expect(loadTokens(dir).keepalive).toEqual({ enabled: false, afterMin: 50, max: 3, quiet: undefined });
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nKEEPALIVE_AFTER_MIN=60\n`);
+    expect(() => loadTokens(dir)).toThrow(/KEEPALIVE_AFTER_MIN/);
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nKEEPALIVE_QUIET=1-7\n`);
+    expect(() => loadTokens(dir)).toThrow(/KEEPALIVE_QUIET/);
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nKEEPALIVE=maybe\n`);
+    expect(() => loadTokens(dir)).toThrow(/KEEPALIVE は on か off/);
   });
 
   it('ファイルが無ければ Error', () => {
@@ -143,6 +157,26 @@ describe('loadTokens', () => {
   it('SESSION_ALLOW_ALL=on なら sessionAllowAll を立てる', () => {
     write(`DISCORD_BOT_TOKEN=${TOKEN}\nSESSION_ALLOW_ALL=on\n`);
     expect(loadTokens(dir).sessionAllowAll).toBe(true);
+  });
+
+  it('INLINE_TEXT_MAX_KB を整数で読み、範囲外や数でなければ Error', () => {
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nINLINE_TEXT_MAX_KB=0\n`);
+    expect(loadTokens(dir).inlineTextMaxKb).toBe(0);
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nINLINE_TEXT_MAX_KB=2048\n`);
+    expect(() => loadTokens(dir)).toThrow(/INLINE_TEXT_MAX_KB/);
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nINLINE_TEXT_MAX_KB=abc\n`);
+    expect(() => loadTokens(dir)).toThrow(/INLINE_TEXT_MAX_KB/);
+  });
+
+  it('UPLOAD_DIRS を ; で区切って読み、相対パスがあれば Error。UPLOAD_MAX_MB は 1〜100', () => {
+    const a = path.join(dir, 'a');
+    const b = path.join(dir, 'b');
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nUPLOAD_DIRS=${a};${b};\nUPLOAD_MAX_MB=25\n`);
+    expect(loadTokens(dir)).toMatchObject({ uploadDirs: [a, b], uploadMaxMb: 25 });
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nUPLOAD_DIRS=${a};rel\n`);
+    expect(() => loadTokens(dir)).toThrow(/UPLOAD_DIRS/);
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nUPLOAD_MAX_MB=0\n`);
+    expect(() => loadTokens(dir)).toThrow(/UPLOAD_MAX_MB/);
   });
 
   it('process.env を変更しない', () => {

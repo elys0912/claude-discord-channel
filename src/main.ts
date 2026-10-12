@@ -8,6 +8,8 @@ import { errMessage } from './errors.js';
 import { Logger } from './log.js';
 import { InstanceLock, acquireWithRetry, isProcessAlive } from './lock.js';
 import { DiscordBridge } from './discord.js';
+import { DEFAULT_INLINE_LIMITS } from './inline-text.js';
+import type { InlineDeps } from './inline-text.js';
 import { startBridgeApp, startDegradedApp } from './app.js';
 import { replyTimeoutMs } from './watchdog.js';
 import { PowerShellConsole, findConsoleScript } from './console.js';
@@ -78,7 +80,7 @@ async function main(dir: string, logger: Logger): Promise<void> {
 
   logger.info(
     `起動 pid=${process.pid} node=${process.version} stateDir=${dir} ` +
-      `allowFrom=${access.allowFrom.length}人 channels=${access.channels?.length ?? 0}件 download=${tokens.downloadDir ? 'on' : 'off'} allowAll=${tokens.sessionAllowAll ? 'on' : 'off'} degraded=${degraded}`
+      `allowFrom=${access.allowFrom.length}人 channels=${access.channels?.length ?? 0}件 download=${tokens.downloadDir ? 'on' : 'off'} upload=${tokens.uploadDirs ? `${tokens.uploadDirs.length}件` : 'off'} allowAll=${tokens.sessionAllowAll ? 'on' : 'off'} degraded=${degraded}`
   );
 
   if (degraded) {
@@ -87,7 +89,7 @@ async function main(dir: string, logger: Logger): Promise<void> {
     return;
   }
 
-  const bridge = new DiscordBridge({ token: tokens.botToken, access, logger });
+  const bridge = new DiscordBridge({ token: tokens.botToken, access, logger, longReplyChars: tokens.longReplyChars });
   try {
     const init = await bridge.init();
     logger.info(`Discord 接続確認 OK bot=${init.botTag}(${init.botUserId}) guild=${init.guildName} dm=${init.dmChannelCount}件`);
@@ -114,6 +116,21 @@ async function main(dir: string, logger: Logger): Promise<void> {
     restartFlagFile: path.join(dir, RESTART_FLAG_FILE),
     download: tokens.downloadDir ? { bridge, dir: tokens.downloadDir } : undefined,
     sessionAllowAll: tokens.sessionAllowAll === true,
+    inline: inlineDeps(bridge, logger, tokens.inlineTextMaxKb),
+    keepalive: {
+      enabled: tokens.keepalive.enabled && tokens.keepalive.max > 0,
+      afterMs: tokens.keepalive.afterMin * 60_000,
+      max: tokens.keepalive.max,
+      quiet: tokens.keepalive.quiet,
+    },
+    upload: tokens.uploadDirs
+      ? {
+          dirs: tokens.uploadDirs,
+          maxBytes: tokens.uploadMaxMb === undefined ? undefined : tokens.uploadMaxMb * 1024 * 1024,
+          // ブリッジの設定（トークン・許可リスト）は、UPLOAD_DIRS の中にあっても送らない
+          protectedDirs: [dir],
+        }
+      : undefined,
     // 起動スクリプトは作業フォルダーで claude.exe を起動し、MCP サーバーも同じ作業フォルダーで動く。
     // channel セッションの設定ファイルは -SettingsFile で替えられるので、起動スクリプトが渡した場所を優先する
     denyFiles: [
@@ -122,6 +139,14 @@ async function main(dir: string, logger: Logger): Promise<void> {
       path.join(process.cwd(), '.claude', 'settings.local.json'),
     ],
   });
+}
+
+/** テキストの添付を本文に差し込む設定。.env の INLINE_TEXT_MAX_KB が 0 なら差し込まない（省略時は既定の上限） */
+function inlineDeps(bridge: DiscordBridge, logger: Logger, maxKb: number | undefined): InlineDeps | undefined {
+  if (maxKb === 0) return undefined;
+  if (maxKb === undefined) return { bridge, logger };
+  const maxFileBytes = maxKb * 1024;
+  return { bridge, logger, limits: { ...DEFAULT_INLINE_LIMITS, maxFileBytes, maxTotalBytes: Math.max(maxFileBytes, DEFAULT_INLINE_LIMITS.maxTotalBytes) } };
 }
 
 /** 画面の読み取りに使う console.ps1 が見つかれば、その実装を返す。Windows 以外・見つからなければ undefined */
