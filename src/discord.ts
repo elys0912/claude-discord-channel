@@ -18,6 +18,7 @@ import type {
   Channel,
   ChatInputCommandInteraction,
   Interaction,
+  MessageContextMenuCommandInteraction,
   Message,
   MessageCreateOptions,
   MessageEditOptions,
@@ -29,7 +30,7 @@ import { chunkText } from './chunk.js';
 import type { ParsedAccess } from './config.js';
 import { errMessage } from './errors.js';
 import { neutralizeBroadcasts } from './format.js';
-import { EventDedupe, conversationOf, gate, threadOf } from './gate.js';
+import { EventDedupe, conversationOf, forwardDelivery, gate, threadOf } from './gate.js';
 import type { ChannelKind, GateResult, InboundMessage } from './gate.js';
 import type { Logger } from './log.js';
 import { DEFAULT_LONG_REPLY_CHARS, toLongReply } from './long-reply.js';
@@ -38,7 +39,7 @@ import { PRESENCE_VIEW } from './presence.js';
 import type { PresenceState } from './presence.js';
 import type { ActionParse } from './permission.js';
 import type { Command } from './app.js';
-import { SLASH_COMMANDS, parseSlashCommand, sameCommands, slashEcho } from './slash.js';
+import { APP_COMMANDS, FORWARD_COMMAND_NAME, checkUse, parseSlashCommand, sameCommands, slashEcho } from './slash.js';
 
 /** 1 通の上限（2000 字）に、コードブロックを閉じ直す分の余裕を持たせる */
 export const TEXT_CHUNK_MAX = 1900;
@@ -336,6 +337,15 @@ export class DiscordBridge {
     this.client.on(Events.Error, (e) => this.logger.error('discord.js のエラー', e));
     this.client.on(Events.MessageCreate, (message) => this.enqueue(() => this.handleMessage(message)));
     this.client.on(Events.InteractionCreate, (interaction) => {
+      if (interaction.isMessageContextMenuCommand()) {
+        // 右クリックメニューも 3 秒以内に応答が要るので、検証と一言の返信は先に済ませ、Claude に渡すのを列に積む
+        const answered = this.answerForward(interaction);
+        this.enqueue(async () => {
+          const forwarded = await answered;
+          if (forwarded && this.handlers) await this.handlers.onMessage(forwarded.result, forwarded.raw);
+        });
+        return;
+      }
       if (interaction.isChatInputCommand()) {
         // スラッシュコマンドも 3 秒以内に応答が要るので、検証と一言の返信は列を待たずに済ませ、コマンドの処理だけを列に積む
         const answered = this.answerSlash(interaction);
@@ -435,7 +445,7 @@ export class DiscordBridge {
   // --- スラッシュコマンド -----------------------------------------------------
 
   /**
-   * SLASH_COMMANDS をアプリのコマンドとして登録する（サーバーとボットとの DM の両方に出る）。
+   * APP_COMMANDS（スラッシュコマンドと右クリックメニュー）をアプリのコマンドとして登録する（サーバーとボットとの DM の両方に出る）。
    * 登録済みのものと同じなら何もしない。失敗しても投げない（`!` のコマンドは使えるので、ログに残して続ける）
    */
   private async registerCommands(): Promise<void> {
@@ -445,8 +455,8 @@ export class DiscordBridge {
       const route = Routes.applicationCommands(appId);
       const registered = (await this.client.rest.get(route)) as unknown[];
       if (sameCommands(registered)) return;
-      await this.client.rest.put(route, { body: SLASH_COMMANDS });
-      this.logger.info(`スラッシュコマンドを登録した 件数=${SLASH_COMMANDS.length}`);
+      await this.client.rest.put(route, { body: APP_COMMANDS });
+      this.logger.info(`スラッシュコマンドと右クリックメニューを登録した 件数=${APP_COMMANDS.length}`);
     } catch (e) {
       this.logger.warn('スラッシュコマンドの登録に失敗（! のコマンドは使える）', errMessage(e));
     }
@@ -493,6 +503,43 @@ export class DiscordBridge {
       };
     } catch (e) {
       this.logger.warn('スラッシュコマンドへの応答に失敗', errMessage(e));
+      return undefined;
+    }
+  }
+
+  /**
+   * 右クリックメニュー「Claude に渡す」。使ってよい人・場所か確かめ、渡したことを一言返して、
+   * 選ばれたメッセージを Claude に渡す形（返信先はその一言、スレッドの中ならそのスレッド）にして返す。
+   * 使えなければ本人にだけ見える返事をして undefined。投げない
+   */
+  private async answerForward(
+    interaction: MessageContextMenuCommandInteraction
+  ): Promise<{ result: GateResult; raw: InboundRef } | undefined> {
+    try {
+      if (interaction.commandName !== FORWARD_COMMAND_NAME) return undefined;
+      const channel = interaction.channel ?? (await this.client.channels.fetch(interaction.channelId).catch(() => null));
+      const kind = channel ? channelKind(channel) : interaction.guildId === null ? 'dm' : 'other';
+      const parentId = kind === 'thread' && channel && 'parentId' in channel ? (channel.parentId ?? '') : undefined;
+      const conversationId = kind === 'thread' ? (parentId ?? '') : interaction.channelId;
+      const refused = checkUse({ guildId: interaction.guildId ?? null, userId: interaction.user.id, conversationId }, this.access, this.allowedConversations);
+      if (refused) {
+        this.logger.warn(`右クリックメニューを無視 reason=${refused} user=${interaction.user.id}`);
+        await interaction.reply({ content: '⚠️ ここでは、このボットのメニューは使えない', flags: MessageFlags.Ephemeral });
+        return undefined;
+      }
+      const target = interaction.targetMessage;
+      await interaction.reply({ content: `📨 Claude に渡した: ${target.url}`, allowedMentions: NO_MENTIONS });
+      const echo = await interaction.fetchReply();
+      this.locations.set(echo.id, echo.channelId);
+      this.locations.set(target.id, target.channelId);
+      const replyTo = kind === 'thread' ? interaction.channelId : echo.id;
+      this.logger.info(`メッセージを Claude に渡す message=${target.id} by=${interaction.user.id}`);
+      return {
+        result: forwardDelivery(toInbound(target, this.botUserId), interaction.user.id, replyTo),
+        raw: { channel: conversationId, ts: target.id, threadTs: replyTo, user: interaction.user.id },
+      };
+    } catch (e) {
+      this.logger.warn('右クリックメニューへの応答に失敗', errMessage(e));
       return undefined;
     }
   }
