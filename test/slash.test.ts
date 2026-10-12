@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { SLASH_COMMANDS, parseSlashCommand, sameCommands, slashEcho } from '../src/slash.js';
+import { ApplicationCommandType } from 'discord.js';
+import { APP_COMMANDS, FORWARD_COMMAND, SLASH_COMMANDS, checkUse, parseSlashCommand, sameCommands, slashEcho } from '../src/slash.js';
 import { parseCommand } from '../src/app.js';
 import type { SlashInput } from '../src/slash.js';
 import type { ParsedAccess } from '../src/config.js';
@@ -67,14 +68,14 @@ describe('parseSlashCommand', () => {
 
 describe('sameCommands', () => {
   it('Discord が足す項目（id など）や並び順の違いは同じとみなす', () => {
-    const registered = [...SLASH_COMMANDS].reverse().map((c, i) => ({ ...c, id: String(i), version: '1', application_id: '9', dm_permission: true }));
+    const registered = [...APP_COMMANDS].reverse().map((c, i) => ({ ...c, id: String(i), version: '1', application_id: '9', dm_permission: true }));
     expect(sameCommands(registered)).toBe(true);
   });
 
   it('説明・引数・数が変わったら違うとみなす', () => {
-    expect(sameCommands(SLASH_COMMANDS.slice(1))).toBe(false);
-    expect(sameCommands(SLASH_COMMANDS.map((c) => (c.name === 'status' ? { ...c, description: '古い説明' } : c)))).toBe(false);
-    expect(sameCommands(SLASH_COMMANDS.map((c) => (c.name === 'restart' ? { ...c, options: [] } : c)))).toBe(false);
+    expect(sameCommands(APP_COMMANDS.slice(1))).toBe(false);
+    expect(sameCommands(APP_COMMANDS.map((c) => (c.name === 'status' ? { ...c, description: '古い説明' } : c)))).toBe(false);
+    expect(sameCommands(APP_COMMANDS.map((c) => (c.name === 'restart' ? { ...c, options: [] } : c)))).toBe(false);
     expect(sameCommands([])).toBe(false);
   });
 });
@@ -82,5 +83,28 @@ describe('sameCommands', () => {
 describe('slashEcho', () => {
   it('使ったコマンドをコードの形で残す', () => {
     expect(slashEcho('restart force')).toBe('⌨️ `/restart force`');
+  });
+});
+
+describe('右クリックメニュー（Claude に渡す）', () => {
+  it('APP_COMMANDS にスラッシュコマンドとメッセージのメニューの両方が入る', () => {
+    expect(APP_COMMANDS).toHaveLength(SLASH_COMMANDS.length + 1);
+    expect(FORWARD_COMMAND).toMatchObject({ type: 3, name: 'Claude に渡す', contexts: [0, 1] });
+    expect(FORWARD_COMMAND.name.length).toBeLessThanOrEqual(32);
+  });
+
+  it('sameCommands は種類も比べる。Discord がメニューに返す空の説明は同じとみなす', () => {
+    const registered = APP_COMMANDS.map((c) => (c.type === ApplicationCommandType.Message ? { ...c, description: '' } : c));
+    expect(sameCommands(registered)).toBe(true);
+    expect(sameCommands(registered.map((c) => (c.type === ApplicationCommandType.Message ? { ...c, type: ApplicationCommandType.User } : c)))).toBe(false);
+    // 前の版（スラッシュコマンドだけ）が登録されていれば、登録し直す
+    expect(sameCommands(SLASH_COMMANDS)).toBe(false);
+  });
+
+  it('checkUse はサーバー・人・場所を確かめる', () => {
+    expect(checkUse({ guildId: null, userId: '200000000000000001', conversationId: DM }, ACCESS, ALLOWED)).toBeUndefined();
+    expect(checkUse({ guildId: '199999999999999999', userId: '200000000000000001', conversationId: DM }, ACCESS, ALLOWED)).toBe('guild_mismatch');
+    expect(checkUse({ guildId: null, userId: '299999999999999999', conversationId: DM }, ACCESS, ALLOWED)).toBe('user_not_allowed');
+    expect(checkUse({ guildId: null, userId: '200000000000000001', conversationId: 'x' }, ACCESS, ALLOWED)).toBe('channel_not_allowed');
   });
 });
