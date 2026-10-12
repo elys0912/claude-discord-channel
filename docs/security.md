@@ -44,7 +44,7 @@ Discord のセッションは `--strict-mcp-config` なので、この登録は�
 
 ### [config/channel-settings.json](../config/channel-settings.json)
 
-- **allow**: プロジェクトの中の読み取り（`Read(./**)`）、`Glob` / `Grep`、このサーバーの `reply` / `react` / `edit_message` / `send_file`。
+- **allow**: プロジェクトの中の読み取り（`Read(./**)`）、`Glob` / `Grep`、このサーバーの `reply` / `react` / `edit_message` / `send_file` / `progress`。
   - `download_file` は入れていない。手元のフォルダーに書き込むので、毎回確認する。
   - `send_file` は入れてある。送ってよいかはブリッジ自身が判定する（[ファイルの送信](usage.md#ファイルの送信send_file)）。
   - git コマンドは `git status` も allow に入れていない。`git diff --no-index` などで、プロジェクトの外のファイルを読めるため。

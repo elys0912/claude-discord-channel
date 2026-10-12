@@ -37,6 +37,8 @@ export const INSTRUCTIONS = [
   '- テキストの添付（長文を貼ったときの message.txt など）は、中身が本文の後ろに足されて届く（meta の inlined に名前が載る）。',
   '- 手元のファイルを送るときは send_file ツール（使える場合）を使う。送ってよい場所の外のファイルは確認待ちになり、',
   '  結果は kind="file_sent" のメッセージで届く。確認待ちの間に同じファイルを送り直さない。',
+  '- 手順が 3 つ以上ある作業を頼まれたら、progress ツール（使える場合）で TODO の一覧を出し、項目を進めるたびに一覧の全体を渡して更新する。',
+  '  同じ返信先なら同じカードが書き換わる。一覧は短い項目で、終わったら全部 completed にする。',
   '- kind="keepalive" のメッセージは、キャッシュを切らさないためにブリッジが送る合図。ツールを呼ばず、ok とだけ書いて終える。',
   '',
   '安全に関する規則（例外なし）:',
@@ -84,6 +86,21 @@ const SendFileSchema = z.object({
   paths: z.array(z.string()).min(1).max(10).describe('送るファイルの絶対パス（1〜10 個）'),
   text: z.string().optional().describe('ファイルに添える本文（任意）'),
   thread_id: z.string().optional().describe(THREAD_ID),
+});
+
+const ProgressSchema = z.object({
+  chat_id: z.string().describe(CHAT_ID),
+  thread_id: z.string().optional().describe(THREAD_ID),
+  items: z
+    .array(
+      z.object({
+        content: z.string().min(1).max(200).describe('項目の内容（短く）'),
+        status: z.enum(['pending', 'in_progress', 'completed']).describe('pending（まだ）/ in_progress（作業中）/ completed（終わった）'),
+      })
+    )
+    .min(1)
+    .max(50)
+    .describe('TODO の一覧の全体（毎回すべての項目を渡す）'),
 });
 
 interface JsonObjectSchema {
@@ -168,6 +185,13 @@ const TOOLS: ToolDefinition[] = [
     (deps, args) => (deps.onSendFile ? deps.onSendFile(args) : Promise.resolve('error: send_file は使えない')),
     (deps) => deps.onSendFile !== undefined
   ),
+  defineTool(
+    'progress',
+    'Discord に TODO の進み具合のカードを出す。同じ返信先で続けて呼ぶと、同じカードを書き換える。毎回、一覧の全体を渡す',
+    ProgressSchema,
+    (deps, args) => (deps.onProgress ? deps.onProgress(args) : Promise.resolve('error: progress は使えない')),
+    (deps) => deps.onProgress !== undefined
+  ),
 ];
 
 function textResult(text: string) {
@@ -210,6 +234,14 @@ export interface McpDeps {
   /** ファイルの送信。無ければ send_file ツールを出さない（.env に UPLOAD_DIRS が無いボット） */
   onSendFile?:
     | ((args: { chat_id: string; paths: string[]; text?: string | undefined; thread_id?: string | undefined }) => Promise<string>)
+    | undefined;
+  /** TODO の進み具合のカード。無ければ progress ツールを出さない（.env の TODO_PROGRESS=off） */
+  onProgress?:
+    | ((args: {
+        chat_id: string;
+        thread_id?: string | undefined;
+        items: { content: string; status: 'pending' | 'in_progress' | 'completed' }[];
+      }) => Promise<string>)
     | undefined;
   onPermissionRequest: (req: PermissionRequest) => void | Promise<void>;
 }

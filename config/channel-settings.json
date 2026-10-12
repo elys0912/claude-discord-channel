@@ -12,7 +12,8 @@
       "mcp__discordbridge__reply",
       "mcp__discordbridge__react",
       "mcp__discordbridge__edit_message",
-      "mcp__discordbridge__send_file"
+      "mcp__discordbridge__send_file",
+      "mcp__discordbridge__progress"
     ],
     "deny": [
       "Read(~/.claude/channels/**)",

@@ -49,6 +49,7 @@
 | `KEEPALIVE_AFTER_MIN` | 55 | 最後の応答から合図を送るまでの分数 |
 | `KEEPALIVE_MAX` | 6 | 最後の会話から合図を送る回数の上限 |
 | `KEEPALIVE_QUIET` | `01:00-07:00` | 合図を送らない時間帯（`HH:MM-HH:MM`）。空なら時間帯なし |
+| `TODO_PROGRESS` | on | TODO の進み具合のカードを出す `progress` ツールを出すか。`off` で出さない |
 
 ## 環境変数
 

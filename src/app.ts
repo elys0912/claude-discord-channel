@@ -31,6 +31,7 @@ import type { QuietHours } from './keepalive.js';
 import { formatTime } from './text.js';
 import { TypingIndicator } from './typing.js';
 import { PresenceUpdater } from './presence.js';
+import { TodoBoard } from './todo.js';
 import { inlineTextAttachments } from './inline-text.js';
 import type { InlineDeps } from './inline-text.js';
 
@@ -175,19 +176,20 @@ export function normalizeEmoji(emoji: string): string {
 
 // --- Claude → Discord（MCP ツールの実体） ----------------------------------------
 
-export type ToolHandlers = Pick<McpDeps, 'onReply' | 'onReact' | 'onEdit' | 'onDownload' | 'onSendFile'>;
+export type ToolHandlers = Pick<McpDeps, 'onReply' | 'onReact' | 'onEdit' | 'onDownload' | 'onSendFile' | 'onProgress'>;
 
 /**
- * reply / react / edit_message / download_file の実体。失敗しても投げず、Claude が読めるエラー文を返す。
+ * reply / react / edit_message / download_file / send_file / progress の実体。失敗しても投げず、Claude が読めるエラー文を返す。
  * onActivity はツールが呼ばれるたびに（成否によらず）呼ぶ。無応答の見張りを解くのに使う。
- * download が無ければ download_file は出さない。
+ * download / files / todo が無ければ、download_file / send_file / progress は出さない。
  */
 export function createToolHandlers(
   bridge: ToolBridge,
   logger: Logger,
   onActivity?: () => void,
   download?: DownloadDeps,
-  files?: Pick<FileSender, 'send'>
+  files?: Pick<FileSender, 'send'>,
+  todo?: Pick<TodoBoard, 'update'>
 ): ToolHandlers {
   const run = async (tool: string, action: () => Promise<string>): Promise<string> => {
     onActivity?.();
@@ -229,6 +231,15 @@ export function createToolHandlers(
       : undefined,
 
     onSendFile: files ? (args) => run('send_file', () => files.send(args)) : undefined,
+
+    onProgress: todo
+      ? ({ chat_id, thread_id, items }) =>
+          run('progress', async () => {
+            const how = await todo.update({ channel: chat_id, threadTs: thread_id }, items);
+            const done = items.filter((i) => i.status === 'completed').length;
+            return `${how === 'posted' ? 'posted' : 'updated'} (${done}/${items.length} completed)`;
+          })
+      : undefined,
   };
 }
 
@@ -558,6 +569,8 @@ export interface BridgeAppOptions {
   keepalive?: { enabled: boolean; afterMs: number; max: number; quiet: QuietHours | undefined } | undefined;
   /** send_file の設定（.env の UPLOAD_DIRS があるとき）。省略時は send_file を出さない */
   upload?: { dirs: string[]; maxBytes?: number | undefined; protectedDirs?: string[] | undefined } | undefined;
+  /** TODO の進み具合のカードを出すか（.env の TODO_PROGRESS）。hook の記録（hookInboxFile）も要る。省略時は出さない */
+  todoProgress?: boolean | undefined;
 }
 
 /**
@@ -588,6 +601,8 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
 
   // server と relay は互いを参照する。relay を使うのは接続後なので、宣言順はこれでよい
   const typing = new TypingIndicator(bridge, logger);
+  // TODO の進み具合のカード（progress ツール）。次に話しかけられたら新しいカードにする
+  const todo = opts.todoProgress ? new TodoBoard(bridge, logger) : undefined;
   // send_file の結果は確認が済んでから Claude に知らせる（server は下で作る。呼ばれるのは接続後）
   const files = opts.upload
     ? new FileSender({
@@ -610,7 +625,8 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
         if (!opts.hookInboxFile) typing.stopAll();
       },
       opts.download,
-      files
+      files,
+      todo
     ),
     onPermissionRequest: (req) => {
       watchdog.activity();
@@ -733,6 +749,7 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
     keepalive,
     onDelivered: (at) => {
       turnActive = true;
+      todo?.reset();
       keepalive?.resetCount();
       typing.start(at.channel, at.threadTs);
     },

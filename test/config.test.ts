@@ -106,7 +106,17 @@ describe('loadTokens', () => {
     expect(loadTokens(dir)).toEqual({
       botToken: TOKEN,
       keepalive: { enabled: true, afterMin: 55, max: 6, quiet: { start: 60, end: 420 } },
+      todoProgress: true,
     });
+  });
+
+  it('TODO_PROGRESS は既定で on、off で止め、それ以外は Error', () => {
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nTODO_PROGRESS=off\n`);
+    expect(loadTokens(dir).todoProgress).toBe(false);
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nTODO_PROGRESS=ON\n`);
+    expect(loadTokens(dir).todoProgress).toBe(true);
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nTODO_PROGRESS=yes\n`);
+    expect(() => loadTokens(dir)).toThrow(/TODO_PROGRESS は on か off/);
   });
 
   it('KEEPALIVE の設定を読み、off・時間帯なし・範囲外を扱う', () => {
