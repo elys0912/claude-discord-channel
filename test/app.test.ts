@@ -1558,3 +1558,31 @@ describe('右クリックメニュー（Claude に渡す）', () => {
     expect(h.discord.calls).toEqual([]);
   });
 });
+
+describe('CI の通知（ciWebhooks）', () => {
+  const HOOK = '999999999999999990';
+  let h: Harness;
+
+  beforeEach(async () => {
+    h = await startHarness({ ...ACCESS, channels: [CH], ciWebhooks: [HOOK] });
+  });
+
+  afterEach(async () => {
+    await h.client.close();
+    await h.stop();
+  });
+
+  it('登録した webhook の投稿を kind=ci で Claude に渡し、👀 を付け、返事はその投稿から作るスレッドに届く', async () => {
+    const msg = { ...h.discord.makeMessage('', { kind: 'channel', id: '9900' }), authorId: HOOK, authorIsBot: true, webhookId: HOOK, embedText: 'CI #3 failed' };
+    await h.discord.receive(msg);
+    await flush();
+
+    const n = channelMessages(h)[0];
+    expect(String(n?.params?.content)).toContain('CI #3 failed');
+    expect(n?.params?.meta).toMatchObject({ chat_id: CH, thread_id: '9900', kind: 'ci', webhook_id: HOOK });
+    expect(h.discord.of('addReaction')).toEqual([expect.objectContaining({ channel: CH, ts: '9900', emoji: REACTION.SEEN })]);
+
+    await h.client.callTool({ name: 'reply', arguments: { chat_id: CH, text: '失敗はテスト', thread_id: '9900' } });
+    expect(h.discord.of('postText').at(-1)).toMatchObject({ channel: CH, threadTs: '9900' });
+  });
+});

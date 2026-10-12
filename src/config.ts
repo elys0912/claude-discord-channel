@@ -198,6 +198,11 @@ export const AccessSchema = z.strictObject({
     .array(snowflake('channels'))
     .refine((arr) => new Set(arr).size === arr.length, { message: 'channels に重複がある' })
     .optional(),
+  /** CI の通知として Claude に渡す webhook の ID。channels のチャンネル（とその中のスレッド）に投稿されたものだけ渡す */
+  ciWebhooks: z
+    .array(snowflake('ciWebhooks'))
+    .refine((arr) => new Set(arr).size === arr.length, { message: 'ciWebhooks に重複がある' })
+    .optional(),
 });
 
 export type ParsedAccess = z.infer<typeof AccessSchema>;
