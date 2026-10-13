@@ -74,9 +74,22 @@ export function clipTo(text: string, max: number): { text: string; clipped: bool
   return { text: text.slice(0, cut) + '…', clipped: true };
 }
 
-/** コードを ``` で包む。中の行頭の ``` はゼロ幅スペースを前置して、フェンスの開閉と誤認されないようにする */
+/**
+ * 連続する ` の間にゼロ幅スペースを入れて、``` を作らせない。
+ * Discord のコードブロックは行の途中の ``` でも閉じるため、行頭だけでなくすべてを分ける（例: "a```b" → "a`\u200b`\u200b`b"）
+ */
+export function breakFences(code: string): string {
+  return code.replace(/`(?=`)/g, '`\u200b');
+}
+
+/** breakFences を済ませたコードを ``` で包む */
+function wrapInFence(fenceSafeCode: string): string {
+  return '```\n' + fenceSafeCode + '\n```';
+}
+
+/** コードを ``` で包む。中の ``` は breakFences で分けて、フェンスの開閉と誤認されないようにする */
 export function fence(code: string): string {
-  return '```\n' + code.replace(/^```/gm, '​```') + '\n```';
+  return wrapInFence(breakFences(code));
 }
 
 type CustomIdButtonStyle = ButtonStyle.Primary | ButtonStyle.Secondary | ButtonStyle.Success | ButtonStyle.Danger;
@@ -102,14 +115,15 @@ function buildDescription(body: string | undefined, code: string | undefined): {
     return clipTo(head, LIMITS.description);
   }
   const sep = head === '' ? '' : '\n';
-  const wrapperLength = fence('').length + sep.length;
+  const wrapperLength = wrapInFence('').length + sep.length;
   const budget = LIMITS.description - head.length - wrapperLength;
   if (budget < 1) {
     // 本文だけで上限に届くなら、コードは諦めて本文を切る
     return { text: clipTo(head, LIMITS.description).text, clipped: true };
   }
-  const clippedCode = clipTo(code, budget);
-  return { text: head + sep + fence(clippedCode.text), clipped: clippedCode.clipped };
+  // 分けて増えた分も上限に数えるため、分けてから切る
+  const clippedCode = clipTo(breakFences(code), budget);
+  return { text: head + sep + wrapInFence(clippedCode.text), clipped: clippedCode.clipped };
 }
 
 /**

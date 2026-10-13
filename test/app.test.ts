@@ -312,8 +312,9 @@ describe('Discord → MCP', () => {
     expect(h.discord.of('postText')[0]?.text).toBe('```\nrm -rf \\u{202E}/ \\u{200B}ok\n```');
   });
 
-  it('fencePreview は中身の行頭の ``` を無効化してからコードブロックで包む', () => {
-    expect(fencePreview('a\n```js\nb\n```')).toBe('```\na\n\u200b```js\nb\n\u200b```\n```');
+  it('fencePreview は中身の ``` を無効化してからコードブロックで包む', () => {
+    const zwsp = String.fromCharCode(0x200b);
+    expect(fencePreview('a\n```js\nb ```')).toBe(`\`\`\`\na\n\`${zwsp}\`${zwsp}\`js\nb \`${zwsp}\`${zwsp}\`\n\`\`\``);
   });
 
   it('期限切れの See more は定型文を送る', async () => {

@@ -27,6 +27,11 @@ describe('toDiscord', () => {
     expect(truncated).toBe(true);
   });
 
+  it('``` を分けて増えた分も含めて、description の上限に収める', () => {
+    const d = toDiscord({ body: 'B', code: '`'.repeat(5000) }).embeds[0]?.description ?? '';
+    expect(d.length).toBeLessThanOrEqual(LIMITS.description);
+  });
+
   it('本文だけで上限を超えたら本文を切る', () => {
     const { embeds, truncated } = toDiscord({ body: 'y'.repeat(5000), code: 'z' });
     expect(embeds[0]?.description?.length).toBe(LIMITS.description);
@@ -73,8 +78,16 @@ describe('clipTo / fence / md', () => {
     expect(r).toEqual({ text: 'ab…', clipped: true });
   });
 
-  it('中の ``` を無効化する', () => {
-    expect(fence('a\n```\nb')).toBe('```\na\n​```\nb\n```');
+  it('中の ``` を、行頭でも行の途中でも無効化する（` の間にゼロ幅スペースを入れる）', () => {
+    expect(fence('ls ``` **読み取りだけ**')).toBe('```\nls `​`​` **読み取りだけ**\n```');
+  });
+
+  it('4 つ以上続く ` も、どこにも ``` を残さない', () => {
+    expect(fence('````')).toBe('```\n`​`​`​`\n```');
+  });
+
+  it('行頭の ``` も無効化する', () => {
+    expect(fence('a\n```\nb')).toBe('```\na\n`​`​`\nb\n```');
   });
 
   it('Markdown の記号をエスケープする', () => {

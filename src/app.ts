@@ -7,6 +7,7 @@ import type { DiscordBridge, ActionContext, InboundRef } from './discord.js';
 import { ChannelServer } from './mcp.js';
 import type { McpDeps } from './mcp.js';
 import { PermissionRelay } from './permission-relay.js';
+import { fence } from './card.js';
 import { revealInvisible } from './permission.js';
 import type { ActionParse } from './permission.js';
 import type { GateResult } from './gate.js';
@@ -493,11 +494,11 @@ function pressedMessage(ctx: ActionContext): PressedMessage | undefined {
 }
 
 /**
- * input_preview をコードブロックで包む。中身の行頭の ``` はゼロ幅スペースを前置して、
- * フェンスの開閉と誤認されない（分割送信時の開き直しも崩れない）ようにする。
+ * input_preview をコードブロックで包む。中身の ``` は card.ts の fence が分けるので、
+ * フェンスの開閉と誤認されない（分割送信時の開き直しも崩れない）。
  */
 export function fencePreview(preview: string): string {
-  return '```\n' + preview.replace(/^```/gm, '\u200b```') + '\n```';
+  return fence(preview);
 }
 
 /**
