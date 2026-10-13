@@ -59,8 +59,17 @@ async function abort(logger: Logger, what: string, e: unknown, cleanup: () => Pr
 async function main(dir: string, logger: Logger): Promise<void> {
   // 同時に動く Discord ブリッジは1つだけ。2つ目は Discord に繋がず縮退モードで動く。
   // 起動し直し（!restart）では旧ブリッジの終了処理と重なるので、少し待ってから諦める。
-  // 強制終了（!restart force）で解放されずに残ったロックは、持ち主の pid が死んでいれば取る
-  const lock = new InstanceLock(path.join(dir, 'instance.lock'), { isAlive: isProcessAlive });
+  // 強制終了（!restart force）で解放されずに残ったロックは、持ち主の pid が死んでいれば取る。
+  // 動いている間に別のインスタンスにロックを取られたら（スリープ明けなど）、Discord との接続を切って終わる（2 本の接続でメッセージが二重に届かないように）
+  let stopApp: (() => Promise<void>) | undefined;
+  const lock = new InstanceLock(path.join(dir, 'instance.lock'), {
+    isAlive: isProcessAlive,
+    onLost: (holder) => {
+      process.stderr.write(`[discordbridge] 別のインスタンス（pid=${holder.pid}）がロックを取ったので、Discord との接続を切って終わる\n`);
+      logger.error(`ロックを別のインスタンス（pid=${holder.pid}）に取られた。後片付けして終わる`);
+      void stopApp?.();
+    },
+  });
   const lockResult = await acquireWithRetry(lock, { timeoutMs: LOCK_RETRY_MS, intervalMs: LOCK_RETRY_INTERVAL_MS });
   const degraded = !lockResult.acquired;
   if (!lockResult.acquired) {
@@ -106,7 +115,10 @@ async function main(dir: string, logger: Logger): Promise<void> {
     bridge,
     logger,
     lock,
-    onCleanupReady: (stop) => installShutdown(logger, stop),
+    onCleanupReady: (stop) => {
+      stopApp = stop;
+      installShutdown(logger, stop);
+    },
     replyTimeoutMs: replyTimeoutMs(),
     console: consoleAccess(logger),
     workDir: process.cwd(),
@@ -161,7 +173,7 @@ function consoleAccess(logger: Logger): PowerShellConsole | undefined {
     return undefined;
   }
   // ブリッジの親は claude.exe（MCP サーバーとして起動される）。そのコンソールの画面を操作する
-  return new PowerShellConsole(script, process.ppid);
+  return new PowerShellConsole(script, process.ppid, logger);
 }
 
 // --- 終了処理 -------------------------------------------------------------------

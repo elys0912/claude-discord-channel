@@ -249,6 +249,17 @@ describe('DiscordBridge の送信（長文の分割と途中の失敗）', () =>
     expect(sent).toHaveLength(2);
   });
 
+  it('分けた結果が空白だけになるチャンクは送らない。本文が空白だけなら何も送らない', async () => {
+    const { bridge, sent } = setup();
+    // 1898 字 + 改行 5 個は、1900 字目（改行 2 個まで）で切れて、残りが改行 3 個だけになる
+    const res = await bridge.postText(CHANNEL, 'a'.repeat(TEXT_CHUNK_MAX - 2) + '\n'.repeat(5));
+    expect(res.ts).toHaveLength(1);
+    expect(sent).toHaveLength(1);
+
+    expect((await bridge.postText(CHANNEL, ' \n\t ')).ts).toEqual([]);
+    expect(sent).toHaveLength(1);
+  });
+
   it('reply の 1 通目で失敗したら、sent=N を付けずにそのまま投げる', async () => {
     const { bridge } = setup({ failFrom: 1 });
     await expect(bridge.postText(CHANNEL, 'x')).rejects.toThrow(/^Missing Permissions$/);
@@ -326,6 +337,18 @@ describe('DiscordBridge のメッセージの在りか（thread_id の検証）'
     client.channels.fetch = async (id: string) => channels[id] ?? null;
     return { bridge, touched, client, channels, channel };
   }
+
+  it('react ツール用の addReactionOrThrow は失敗を投げ、受信時の印の addReaction は投げない', async () => {
+    const { bridge, channels } = setup();
+    channels[ALLOWED] = {
+      id: ALLOWED,
+      isThread: () => false,
+      isSendable: () => true,
+      messages: { react: async () => Promise.reject(new Error('Unknown Emoji')) },
+    };
+    await expect(bridge.addReactionOrThrow(ALLOWED, MESSAGE, 'ok')).rejects.toThrow('Unknown Emoji');
+    await expect(bridge.addReaction(ALLOWED, MESSAGE, 'ok')).resolves.toBeUndefined();
+  });
 
   it('thread_id のチャンネルの取得が失敗（reject）したら、許可した会話で操作する（D-DC-05）', async () => {
     const { bridge, touched, client, channels } = setup();

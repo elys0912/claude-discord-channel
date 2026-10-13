@@ -46,12 +46,12 @@ export const REACTION = {
 // --- 依存の型（テストで差し替えられるよう、使うメソッドだけに絞る） -------------
 
 /** MCP ツール（reply / react / edit_message）が使う Discord 側の操作 */
-export type ToolBridge = Pick<DiscordBridge, 'postText' | 'addReaction' | 'updateText'>;
+export type ToolBridge = Pick<DiscordBridge, 'postText' | 'addReactionOrThrow' | 'updateText'>;
 
 /** 受信処理・起動停止まで含めた Discord 側の操作 */
 export type AppBridge = Pick<
   DiscordBridge,
-  'start' | 'stop' | 'postText' | 'postCard' | 'addReaction' | 'updateText' | 'postToAll' | 'updateCard' | 'sendFiles' | 'sendTyping'
+  'start' | 'stop' | 'postText' | 'postCard' | 'addReaction' | 'addReactionOrThrow' | 'updateText' | 'postToAll' | 'updateCard' | 'sendFiles' | 'sendTyping'
 > &
   Partial<Pick<DiscordBridge, 'isConnected' | 'setPresence'>>;
 
@@ -190,7 +190,8 @@ export type ToolHandlers = Pick<McpDeps, 'onReply' | 'onReact' | 'onEdit' | 'onD
 
 /**
  * reply / react / edit_message / download_file / send_file / progress の実体。失敗しても投げず、Claude が読めるエラー文を返す。
- * onActivity はツールが呼ばれるたびに（成否によらず）呼ぶ。無応答の見張りを解くのに使う。
+ * onActivity は返事にあたるツール（reply / react / edit_message / send_file）が呼ばれるたびに（成否によらず）呼ぶ。無応答の見張りを解くのに使う。
+ * download_file と progress は作業の途中で呼ぶものなので、見張りは解かない（返事をせずに終えたら、無応答の警告を出す）。
  * download / files / todo が無ければ、download_file / send_file / progress は出さない。
  */
 export function createToolHandlers(
@@ -201,8 +202,8 @@ export function createToolHandlers(
   files?: Pick<FileSender, 'send'>,
   todo?: Pick<TodoBoard, 'update'>
 ): ToolHandlers {
-  const run = async (tool: string, action: () => Promise<string>): Promise<string> => {
-    onActivity?.();
+  const run = async (tool: string, action: () => Promise<string>, isAnswer = true): Promise<string> => {
+    if (isAnswer) onActivity?.();
     try {
       return await action();
     } catch (e) {
@@ -220,7 +221,7 @@ export function createToolHandlers(
 
     onReact: ({ chat_id, message_id, emoji, thread_id }) =>
       run('react', async () => {
-        await bridge.addReaction(chat_id, message_id, normalizeEmoji(emoji), thread_id);
+        await bridge.addReactionOrThrow(chat_id, message_id, normalizeEmoji(emoji), thread_id);
         return 'reacted';
       }),
 
@@ -237,7 +238,7 @@ export function createToolHandlers(
             const result = await downloadAttachment(download, ref, extract ?? false);
             logger.info(`download_file attachment=${attachment_id} extract=${extract ?? false}`);
             return result;
-          })
+          }, false)
       : undefined,
 
     onSendFile: files ? (args) => run('send_file', () => files.send(args)) : undefined,
@@ -248,7 +249,7 @@ export function createToolHandlers(
             const how = await todo.update({ channel: chat_id, threadTs: thread_id }, items);
             const done = items.filter((i) => i.status === 'completed').length;
             return `${how === 'posted' ? 'posted' : 'updated'} (${done}/${items.length} completed)`;
-          })
+          }, false)
       : undefined,
   };
 }
@@ -273,12 +274,12 @@ export function createDegradedDeps(logger: Logger): McpDeps {
 
 /** DM か許可チャンネルで届いたメッセージ。保留中の ID への `yes xxxxx` / `no xxxxx` なら許可の回答、それ以外は Claude へ中継する */
 export async function handleMessage(wiring: Wiring, result: GateResult, raw: InboundRef): Promise<void> {
-  const { server, relay, logger, watchdog } = wiring;
+  const { bridge, server, relay, logger, watchdog } = wiring;
 
   // `!screen` などのコマンドは Claude に渡さずにここで処理する（Claude が止まっていても使えるように）
   const command = result.kind === 'deliver' ? parseCommand(result.content) : undefined;
   if (command && raw.channel && raw.threadTs) {
-    if (raw.ts) await markMessage(wiring, raw.channel, raw.ts, REACTION.SEEN);
+    if (raw.ts) await bridge.addReaction(raw.channel, raw.ts, REACTION.SEEN);
     await handleCommand(wiring, command, { channel: raw.channel, threadTs: raw.threadTs }, raw.user ?? '');
     return;
   }
@@ -293,7 +294,7 @@ export async function handleMessage(wiring: Wiring, result: GateResult, raw: Inb
       if (!(await relay.answerByText(result.verdict, raw.user ?? ''))) return;
       if (raw.channel && raw.ts) {
         const reaction = result.verdict.behavior === 'allow' ? REACTION.ALLOW : REACTION.DENY;
-        await markMessage(wiring, raw.channel, raw.ts, reaction);
+        await bridge.addReaction(raw.channel, raw.ts, reaction);
       }
       return;
 
@@ -311,21 +312,12 @@ export async function handleMessage(wiring: Wiring, result: GateResult, raw: Inb
       await server.pushMessage(content, meta);
       if (raw.channel && raw.threadTs) wiring.onDelivered?.({ channel: raw.channel, threadTs: raw.threadTs });
       if (raw.channel && raw.threadTs) watchdog.delivered({ channel: raw.channel, threadTs: raw.threadTs });
-      if (raw.channel && raw.ts) await markMessage(wiring, raw.channel, raw.ts, REACTION.SEEN);
+      if (raw.channel && raw.ts) await bridge.addReaction(raw.channel, raw.ts, REACTION.SEEN);
       return;
     }
 
     default:
       assertNever(result);
-  }
-}
-
-/** 受信したメッセージに目印のリアクションを付ける。付けられなくても受信の処理は続ける（ログに残す） */
-async function markMessage(wiring: Wiring, channel: string, ts: string, emoji: string): Promise<void> {
-  try {
-    await wiring.bridge.addReaction(channel, ts, emoji);
-  } catch (e) {
-    wiring.logger.warn(`リアクションに失敗 emoji=${emoji}`, errMessage(e));
   }
 }
 

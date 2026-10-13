@@ -166,15 +166,6 @@ describe('Discord → MCP', () => {
     expect(n?.params?.content).toContain('close code 4004');
   });
 
-  it('👀 を付けられなくても、受信の処理は続ける（Claude への中継・コマンドの返事）', async () => {
-    vi.spyOn(h.discord, 'addReaction').mockRejectedValue(new Error('Missing Permissions'));
-    await h.discord.dm('hello', { id: '1001' });
-    await h.discord.dm('!status', { id: '1002' });
-    await flush();
-    expect(channelMessages(h).map((n) => n.params?.content)).toEqual(['hello']);
-    expect(h.discord.of('postText')[0]).toMatchObject({ channel: DM1, threadTs: '1002' });
-  });
-
   it('許可外ユーザーの DM・ボットの知らせなどの普通でない発言は何も起きない', async () => {
     await h.discord.dm('hello', { user: STRANGER, channel: DM1 });
     await h.discord.dm('pinned', { system: true });
@@ -599,7 +590,7 @@ describe('createToolHandlers 単体', () => {
         postText: async () => {
           throw new Error('boom');
         },
-        addReaction: async () => {
+        addReactionOrThrow: async () => {
           throw new Error('Unknown Emoji');
         },
         updateText: async () => {
@@ -616,14 +607,14 @@ describe('createToolHandlers 単体', () => {
     expect(handlers.onSendFile).toBeUndefined();
   });
 
-  it('ツールが呼ばれるたびに、成否によらず onActivity を呼ぶ', async () => {
+  it('返事にあたるツールが呼ばれるたびに、成否によらず onActivity を呼ぶ', async () => {
     let n = 0;
     const handlers = createToolHandlers(
       {
         postText: async () => {
           throw new Error('boom');
         },
-        addReaction: async () => undefined,
+        addReactionOrThrow: async () => undefined,
         updateText: async () => undefined,
       },
       new Logger({ stderr: false }),
@@ -632,6 +623,41 @@ describe('createToolHandlers 単体', () => {
     await handlers.onReply({ chat_id: DM1, text: 'x' });
     await handlers.onReact({ chat_id: DM1, message_id: '1', emoji: '👀' });
     expect(n).toBe(2);
+  });
+
+  it('onActivity（無応答の見張りを解く）は reply / react / edit_message / send_file で呼び、download_file と progress では呼ばない', async () => {
+    const onActivity = vi.fn();
+    const handlers = createToolHandlers(
+      {
+        postText: async () => ({ ts: ['1'] }),
+        addReactionOrThrow: async () => undefined,
+        updateText: async () => undefined,
+      },
+      new Logger({ stderr: false }),
+      onActivity,
+      {
+        bridge: {
+          attachmentInfo: async () => {
+            throw new Error('not found');
+          },
+          fetchFile: async () => {
+            throw new Error('not found');
+          },
+        },
+        dir: os.tmpdir(),
+      },
+      { send: async () => 'sent (1 file(s))' },
+      { update: async () => 'posted' }
+    );
+    await handlers.onDownload?.({ chat_id: DM1, message_id: '1', attachment_id: '2' });
+    await handlers.onProgress?.({ chat_id: DM1, items: [{ content: 'a', status: 'in_progress' }] });
+    expect(onActivity).not.toHaveBeenCalled();
+
+    await handlers.onReply({ chat_id: DM1, text: 'x' });
+    await handlers.onReact({ chat_id: DM1, message_id: '1', emoji: '👀' });
+    await handlers.onEdit({ chat_id: DM1, message_id: '1', text: 'x' });
+    await handlers.onSendFile?.({ chat_id: DM1, paths: ['a.txt'] });
+    expect(onActivity).toHaveBeenCalledTimes(4);
   });
 });
 

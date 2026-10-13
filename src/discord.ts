@@ -229,6 +229,14 @@ export function toInbound(message: Message, botUserId: string | undefined): Inbo
   };
 }
 
+/**
+ * limit ごとに分けたチャンクのうち、空白だけでないもの。分けた結果、末尾が改行だけのチャンクになることがあり、
+ * そのまま送ると Discord に拒否されて、全部届いているのに失敗（sent=N）として返ってしまうため
+ */
+function nonBlankChunks(text: string, limit: number): string[] {
+  return chunkText(text, limit).filter((piece) => piece.trim() !== '');
+}
+
 /** スレッドの名前（本文の先頭。空なら Claude）。THREAD_NAME_MAX で切り、サロゲートペアの途中では切らない */
 export function threadName(content: string): string {
   const oneLine = content.replace(/<@!?\d+>/g, '').replace(/\s+/g, ' ').trim();
@@ -656,7 +664,7 @@ export class DiscordBridge {
   // --- 送信 -----------------------------------------------------------------
 
   /**
-   * テキストを送る。許可した会話以外には送らない（投げる）。一斉メンションは無効化し、空なら何も送らない。
+   * テキストを送る。許可した会話以外には送らない（投げる）。一斉メンションは無効化し、空白だけなら何も送らない。
    * 長文は TEXT_CHUNK_MAX ごとに分けて順に送る。途中のチャンクで失敗した場合、1 通以上送れていれば
    * 例外のメッセージに `sent=N`（送れた件数）を付けて投げる（Claude が再送の範囲を判断できるように）。
    */
@@ -673,7 +681,7 @@ export class DiscordBridge {
       return { ts: [sent.id], asFile: true };
     }
     try {
-      for (const [i, piece] of chunkText(safe, TEXT_CHUNK_MAX).entries()) {
+      for (const [i, piece] of nonBlankChunks(safe, TEXT_CHUNK_MAX).entries()) {
         // DM で返信の参照を付けるのは最初の 1 通だけ
         const sent = await this.send(i === 0 ? target : { channel: target.channel }, { content: piece });
         ids.push(sent.id);
@@ -717,7 +725,7 @@ export class DiscordBridge {
   async sendFiles(channel: string, files: { path: string; name: string }[], text?: string, threadTs?: string): Promise<{ ts: string }> {
     this.assertAllowed(channel);
     const target = await this.resolveTarget(channel, threadTs);
-    const [first, ...rest] = text === undefined ? [] : chunkText(neutralizeBroadcasts(text), TEXT_CHUNK_MAX);
+    const [first, ...rest] = text === undefined ? [] : nonBlankChunks(neutralizeBroadcasts(text), TEXT_CHUNK_MAX);
     const sent = await this.send(target, {
       ...(first ? { content: first } : {}),
       files: files.map((f) => ({ attachment: f.path, name: f.name })),
@@ -752,11 +760,24 @@ export class DiscordBridge {
     await channel.messages.edit(messageId, { ...options, allowedMentions: NO_MENTIONS });
   }
 
-  /** リアクション付与。失敗は投げる（react ツールが error を返せるように。受信時の 👀 は app.ts の markMessage が握る） */
-  async addReaction(channel: string, ts: string, emoji: string, threadTs?: string): Promise<void> {
+  /**
+   * リアクション付与（MCP の react ツール用）。失敗（絵文字名の誤り・メッセージが無い・権限不足など）は投げる。
+   * もう付いているリアクションは Discord が成功で返すので、特別扱いは要らない
+   */
+  async addReactionOrThrow(channel: string, ts: string, emoji: string, threadTs?: string): Promise<void> {
     this.assertAllowed(channel);
     const target = await this.sendable(await this.locate(channel, ts, threadTs));
     await target.messages.react(ts, emoji);
+  }
+
+  /** リアクション付与（受信時の 👀 や回答の印）。失敗しても投げない（ログに残す） */
+  async addReaction(channel: string, ts: string, emoji: string, threadTs?: string): Promise<void> {
+    this.assertAllowed(channel);
+    try {
+      await this.addReactionOrThrow(channel, ts, emoji, threadTs);
+    } catch (e) {
+      this.logger.warn(`リアクションに失敗 emoji=${emoji}`, errMessage(e));
+    }
   }
 
   /**
