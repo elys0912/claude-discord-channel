@@ -42,7 +42,8 @@ async function main(): Promise<void> {
     console.log(`access.json: 未作成、または読み込み不可（${errMessage(e)}）`);
   }
 
-  const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+  // ブリッジと同じく Message Content Intent も要求する。Developer Portal で OFF なら、ブリッジの起動と同じくここでログインに失敗する
+  const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.MessageContent] });
   try {
     const ready = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('準備が時間内に終わらなかった')), READY_TIMEOUT_MS);
@@ -55,7 +56,11 @@ async function main(): Promise<void> {
     await ready;
   } catch (e) {
     console.error(`[check] ログインに失敗: ${errMessage(e)}`);
-    console.error('  トークンが古い（リセットした）か、貼り間違えている可能性がある。Developer Portal の Bot でリセットし直して');
+    if (/disallowed intents/i.test(errMessage(e))) {
+      console.error('  Developer Portal の Bot で Message Content Intent が OFF になっている。ON にして');
+    } else {
+      console.error('  トークンが古い（リセットした）か、貼り間違えている可能性がある。Developer Portal の Bot でリセットし直して');
+    }
     await client.destroy();
     process.exitCode = 1;
     return;

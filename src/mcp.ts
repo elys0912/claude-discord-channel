@@ -17,7 +17,7 @@ const LOGGED_ID_MAX = 40;
 
 /**
  * MCP サーバーの名前。scripts/start.ps1 の $ServerName（--mcp-config と --dangerously-load-development-channels）と
- * config/channel-settings.json の `mcp__slackbridge__*` も同じ名前にすること
+ * config/channel-settings.json の `mcp__discordbridge__*` も同じ名前にすること
  */
 export const SERVER_NAME = 'discordbridge';
 export const SERVER_VERSION = '0.1.0';

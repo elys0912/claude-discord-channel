@@ -52,7 +52,7 @@ npm run build
 1. **New Application** でアプリを作る。名前がボットの表示名になる。
 2. **Bot** の画面で次を設定する。
    - **Reset Token** でトークンを発行する。これが **`DISCORD_BOT_TOKEN`** になる。表示されるのはこの1回だけなので、すぐ `.env` に貼る。リセットには多要素認証が要る。
-   - **Privileged Gateway Intents** の **Message Content Intent** を ON にする。OFF だと、メッセージの本文が空で届く。
+   - **Privileged Gateway Intents** の **Message Content Intent** を ON にする。OFF だと、ブリッジの起動（と `npm run check`）が `Used disallowed intents` で失敗する。
    - **Public Bot** を OFF にする。ほかの人が自分のサーバーにこのボットを入れられないようにするため。OFF にできないときは、先に **Installation** で **Install Link** を **None** にする。
 3. **OAuth2** → **URL Generator** で、scope に `bot` を選び、次の権限を付けた URL を作る。その URL をブラウザで開き、使うサーバーにボットを招待する。
 
@@ -117,6 +117,7 @@ npm run check
 ビルド（`precheck`）のあと、Discord にログインして次を表示する。トークンそのものは出さない。
 
 - 状態ディレクトリの場所と、トークンの形が正しいか
+- Message Content Intent が ON か（OFF ならログインに失敗する）
 - ボットの名前と ID、参加しているサーバー
 - `guildId` のサーバーにボットが入っているか
 - `allowFrom` に書いた ID の表示名
