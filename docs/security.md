@@ -52,7 +52,7 @@ Discord のセッションは `--strict-mcp-config` なので、この登録は�
 - **deny**:
   - 読み取りの禁止（`Read(...)`）
     - Claude Code の設定と状態: `~/.claude/**`（状態ディレクトリの `~/.claude/channels/**` を含む）、`~/.claude.json`
-    - 認証情報: `~/.ssh/**`、`~/.git-credentials`、`~/.aws/**`、`~/.config/gh/**`、`~/.npmrc`、`~/.docker/**`
+    - 認証情報: `~/.ssh/**`、`~/.git-credentials`、`~/.aws/**`、`~/.config/gh/**`、`~/AppData/Roaming/GitHub CLI/**`（Windows の GitHub CLI の設定）、`~/.npmrc`、`~/.docker/**`
     - 秘密のファイル: どこにあっても `.env*`、`*.pem`、`*.key`
   - 編集の禁止（`Edit(...)`）: 状態ディレクトリの `~/.claude/channels/**`、プロジェクトの `./.claude/**`
   - 破壊的な git 操作: `git push --force` / `-f`、`git reset --hard`（Bash と PowerShell の両方）
