@@ -368,9 +368,8 @@ export class DiscordBridge {
       this.connected = true;
       this.logger.info('gateway: resumed');
     });
-    // discord.js 14 の ShardDisconnect は、回復できない close code で閉じて再接続しないときだけ来る
+    // discord.js 14 の ShardDisconnect は、回復できない close code（4004 認証の失敗・4014 Intent の不許可など）で閉じて再接続しないときだけ来る
     this.client.on(Events.ShardDisconnect, (event) => this.gatewayLost(`close code ${event.code}`));
-    this.client.on(Events.Invalidated, () => this.gatewayLost('session invalidated'));
     this.client.on(Events.ShardReconnecting, () => {
       this.connected = false;
       this.logger.info('gateway: reconnecting');

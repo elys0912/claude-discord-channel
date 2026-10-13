@@ -108,12 +108,6 @@ describe('DiscordBridge の回復できない切断', () => {
     expect(lost).toEqual(['close code 4004']);
   });
 
-  it('セッションの無効化（Invalidated）も知らせる', () => {
-    const { lost, client } = setup();
-    client.emit(Events.Invalidated);
-    expect(lost).toEqual(['session invalidated']);
-  });
-
   it('再接続を試みる切断（ShardReconnecting）は知らせない', () => {
     const { lost, client } = setup();
     client.emit(Events.ShardReconnecting, 0);
