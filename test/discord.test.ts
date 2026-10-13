@@ -296,6 +296,78 @@ describe('DiscordBridge の送信（長文の分割と途中の失敗）', () =>
   });
 });
 
+describe('DiscordBridge のボタン操作と受信の列', () => {
+  const USER = '200000000000000001';
+  const CHANNEL = '500000000000000060';
+  const THREAD = '600000000000000061';
+
+  function setup() {
+    const actions: { parsed: unknown; ctx: unknown }[] = [];
+    const bridge = new DiscordBridge({
+      token: 'unused',
+      access: { guildId: '100000000000000001', allowFrom: [USER], channels: [CHANNEL] },
+      logger: new Logger({ stderr: false }),
+    });
+    const internals = bridge as unknown as {
+      botUserId: string;
+      allowedConversations: Set<string>;
+      handleInteraction: (interaction: unknown) => Promise<void>;
+      enqueue: (task: () => Promise<void>) => void;
+      inbound: Promise<void>;
+    };
+    internals.botUserId = BOT;
+    internals.allowedConversations.add(CHANNEL);
+    void bridge.start({ onMessage: () => undefined, onAction: (parsed, ctx) => void actions.push({ parsed, ctx }) });
+    return { actions, internals };
+  }
+
+  /** スレッドの中のボタン操作。author は押されたメッセージを投稿した人 */
+  function buttonInThread(author: string) {
+    return {
+      isButton: () => true,
+      isStringSelectMenu: () => false,
+      channel: { id: THREAD, type: ChannelType.PublicThread, parentId: CHANNEL },
+      message: { id: '800000000000000062', author: { id: author } },
+      customId: 'perm:allow:abcde',
+      guildId: '100000000000000001',
+      user: { id: USER },
+    };
+  }
+
+  it('ボット自身のメッセージ以外のボタンは扱わない', async () => {
+    const { actions, internals } = setup();
+    await internals.handleInteraction(buttonInThread('1400000000000000099'));
+    expect(actions).toEqual([]);
+  });
+
+  it('スレッドの中のボタンは、親のチャンネルを会話、スレッドを返信先として渡す', async () => {
+    const { actions, internals } = setup();
+    await internals.handleInteraction(buttonInThread(BOT));
+    expect(actions).toEqual([
+      {
+        parsed: expect.objectContaining({ ok: true }),
+        ctx: { userId: USER, channelId: CHANNEL, messageTs: '800000000000000062', threadTs: THREAD },
+      },
+    ]);
+  });
+
+  it('受信の列は、前の処理が終わってから次を始め、例外が出ても次を続ける', async () => {
+    const { internals } = setup();
+    const order: string[] = [];
+    internals.enqueue(async () => {
+      await new Promise((r) => setTimeout(r, 20));
+      order.push('first');
+      throw new Error('boom');
+    });
+    internals.enqueue(async () => {
+      order.push('second');
+    });
+    await new Promise((r) => setTimeout(r, 60));
+    await internals.inbound;
+    expect(order).toEqual(['first', 'second']);
+  });
+});
+
 describe('DiscordBridge のスレッドを作れない返信先', () => {
   const CHANNEL = '500000000000000050';
   const ORIGIN = '800000000000000051';
