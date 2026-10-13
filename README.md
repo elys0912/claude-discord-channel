@@ -143,10 +143,10 @@ Windows Terminal から実行する。
 | コマンド | 動作 |
 |---|---|
 | `scripts\start.cmd` | `projects.json` の一覧から番号で選んで起動する（Enter で先頭、`q` で中止） |
-| `scripts\start.cmd my-app` | `projects.json` の name で指定して起動する |
+| `scripts\start.cmd my-app` | `projects.json` の name で指定して起動する（name を先に照合する。同じ名前のフォルダーがカレントにあっても、`projects.json` のフォルダーで起動する） |
 | `scripts\start.cmd C:\path\to\app` | パスで直接指定して起動する |
 | `scripts\start.cmd my-app -PermissionMode auto` | 実行許可のモードを変える（[権限の設計](docs/security.md#権限の設計)） |
-| `scripts\start.cmd -DryRun` | 起動せずに、実行するコマンドラインだけを表示する。ビルドは省き、`.env` / `access.json` が無くても警告だけ出す |
+| `scripts\start.cmd -DryRun` | 起動せずに、実行するコマンドラインだけを表示する。ビルドは省き、`.env` / `access.json` が無くても警告だけ出す。`mcp.json` などは DryRun 用の別のフォルダーに書くので、動いているセッションには影響しない |
 | `scripts\start.cmd C:\path\to\app -StateDir <dir> -SettingsFile <file>` | 別のボットと設定で、もう1つのセッションを起動する（[セッションを並べる](docs/usage.md#セッションを並べる)） |
 
 - 起動すると experimental channels の警告ダイアログが出る。起動スクリプトが画面を見張って、**「1」（I am using this for local development）** を自動で選ぶ。90秒たってもダイアログが残っていたら、手で「1」を選ぶ。

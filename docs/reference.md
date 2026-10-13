@@ -29,8 +29,8 @@
 | `projects.json` | `config\`（git の管理外） | `projects`: `{ name, path }` の配列。起動時の選択肢になる |
 | `extra-mcp.json` | `config\`（git の管理外） | Discord のセッションで一緒に使う MCP サーバー。`.mcp.json` と同じ `mcpServers` の形で書く（ひな形: `extra-mcp.example.json`）。登録したサーバーのツールは確認なしで実行される |
 | `channel-settings.json` | `config\` | Discord のセッション専用の Claude Code の設定 |
-| `mcp.json` | `%TEMP%\claude-discord-channel\<状態ディレクトリ名>\` | 起動スクリプトが毎回作る MCP の設定 |
-| `channel-settings.merged.json` | `%TEMP%\claude-discord-channel\<状態ディレクトリ名>\` | `channel-settings.json` に、追加の allow と hook を足した設定。起動スクリプトが毎回作る |
+| `mcp.json` | `%TEMP%\claude-discord-channel\<状態ディレクトリ名>-<ハッシュ>\` | 起動スクリプトが毎回作る MCP の設定 |
+| `channel-settings.merged.json` | `%TEMP%\claude-discord-channel\<状態ディレクトリ名>-<ハッシュ>\` | `channel-settings.json` に、追加の allow と hook を足した設定。起動スクリプトが毎回作る |
 
 ## `.env` の設定
 
@@ -144,7 +144,7 @@ Gateway の再接続は discord.js に任せている。
 | 症状 | 対処 |
 |---|---|
 | `!restart` したのに戻ってこない | `!status` で状態を見る。`/exit` が効かなければ `!restart force` を使う。警告ダイアログで止まっているなら、`dialog-answer.ps1` が探す文字列（`start.ps1` の `$DevChannelDialogPattern` / `$DevChannelChoicePattern`）が画面の文言と合っていない可能性がある。手元で画面を見て直す |
-| 使用量の上限や入力待ちの通知が Discord に来ない | 状態ディレクトリの `hooks.jsonl` が増えているかを見る。増えていなければ hook が動いていない。`%TEMP%\claude-discord-channel\<状態ディレクトリ名>\channel-settings.merged.json` に `hooks` があるか、`node` に PATH が通っているかを確かめる |
+| 使用量の上限や入力待ちの通知が Discord に来ない | 状態ディレクトリの `hooks.jsonl` が増えているかを見る。増えていなければ hook が動いていない。`%TEMP%\claude-discord-channel\<状態ディレクトリ名>-<ハッシュ>\channel-settings.merged.json` に `hooks` があるか、`node` に PATH が通っているかを確かめる |
 | `!screen` / `!restart` / `!compact` / `!stop` / 警告ダイアログへの自動応答がどれも動かない | PowerShell が Constrained Language Mode だと、`console.ps1` の `Add-Type` が失敗する。`powershell -NoProfile -Command '$ExecutionContext.SessionState.LanguageMode'` の結果が `FullLanguage` かを確かめる。それ以外なら、その PC ではこれらの機能を使えない |
 
 ここで解決しないときは、`logs\bridge.log` の該当する行（トークンは伏せてある）を添えて、GitHub の Issues に書いてほしい。

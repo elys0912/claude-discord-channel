@@ -12,11 +12,11 @@ Discord から実行できる範囲を変える前（`-PermissionMode` を変え
 
 | フラグ | 目的 |
 |---|---|
-| `--mcp-config %TEMP%\claude-discord-channel\<状態ディレクトリ名>\mcp.json` | `discordbridge` サーバーを読み込む。clone 先の絶対パスと状態ディレクトリを含むので、起動のたびに作り直す |
+| `--mcp-config %TEMP%\claude-discord-channel\<状態ディレクトリ名>-<ハッシュ>\mcp.json` | `discordbridge` サーバーを読み込む。clone 先の絶対パスと状態ディレクトリを含むので、起動のたびに作り直す |
 | `--strict-mcp-config` | `--mcp-config` 以外の MCP サーバー（ユーザー設定やプロジェクトの `.mcp.json`）を読み込まない。Discord のセッションでも使うサーバーは `config\extra-mcp.json` に書く（[使い方の詳細](usage.md#普段の-mcp-サーバーは-discord-のセッションでは読み込まれない)） |
 | `--no-chrome` | Claude in Chrome との連携を無効にする。有効なままだと、ブラウザ操作が必要になったときに選択画面がターミナルに出て、Discord に中継されないまま止まる |
 | `--setting-sources project,local` | ユーザー設定（`~/.claude/settings.json`）を読まない。普段使いのために入れた緩い許可（`Bash(*)` など）を使って、Discord からの指示が確認なしで実行されるのを防ぐ |
-| `--settings config\channel-settings.json` | Discord のセッション専用の設定を重ねる。managed（組織の管理設定）を除けば、どの設定よりも優先される。`extra-mcp.json` のサーバーや「今後も許可」のルールがあるときは、それらを allow に加えた `channel-settings.merged.json`（`%TEMP%\claude-discord-channel\<状態ディレクトリ名>\` に作る）を代わりに渡す。`-SettingsFile` で別の設定ファイルに替えられる |
+| `--settings config\channel-settings.json` | Discord のセッション専用の設定を重ねる。managed（組織の管理設定）を除けば、どの設定よりも優先される。`extra-mcp.json` のサーバーや「今後も許可」のルールがあるときは、それらを allow に加えた `channel-settings.merged.json`（`%TEMP%\claude-discord-channel\<状態ディレクトリ名>-<ハッシュ>\` に作る）を代わりに渡す。`-SettingsFile` で別の設定ファイルに替えられる |
 | `--permission-mode default` | 許可リストに無い操作は毎回確認する。`-PermissionMode` で変えられる（下記） |
 | `--dangerously-load-development-channels server:discordbridge` | experimental の channels 機能を有効にする |
 
