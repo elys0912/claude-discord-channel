@@ -199,7 +199,7 @@ Discord のセッションは `--strict-mcp-config` で起動する。そのた�
 
 - ルールは確認の中身から作る。自由な入力は受け付けない。作れるものは許可リストで決めてあり、作れない操作のカードには **♾ 今後も許可** を出さない（その場の 1 回の許可だけになる）。方式と一覧は [権限の設計とセキュリティ](security.md#今後も許可で作れるルール) に書いてある。
   - Bash / PowerShell: 許可リストのコマンド（`ls` / `dir` / `pwd` / `Get-Location` / `Get-ChildItem` / `git status` / `git log` / `git branch`）だけ、`Bash(git status:*)` の形にする。`cat` / `Get-Content` / `git diff` / `npm` / `npx` / `node` / `python` などは作らない。
-  - Read / Grep / Glob: 対象のフォルダー以下の `Read` にする。例えば `C:\devoo.ts` を読んだなら `Read(//c/dev/foo/**)`。Grep / Glob は `path` のフォルダーを使う。
+  - Read / Grep / Glob: 対象のフォルダー以下の `Read` にする。例えば `C:\dev\foo\a.ts` を読んだなら `Read(//c/dev/foo/**)`。Grep / Glob は `path` のフォルダーを使う。
   - Edit / Write / MultiEdit / NotebookEdit: 対象のフォルダー以下の `Edit` にする（例: `Edit(//c/dev/foo/**)`）。
   - WebFetch: 取得先のホストに絞る（例: `WebFetch(domain:example.com)`）。
   - MCP の個別のツールで、名前から読み取り専用と分かるもの（`get_` / `list_` / `search_` などで始まるもの）: ツール名だけにする（例: `mcp__github__get_issue`）。
