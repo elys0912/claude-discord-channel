@@ -2,7 +2,16 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { AllowRuleStore, denyOverlaps, deriveRule, parseRuleForCheck, proposeRule, readDeny, toRulePath } from '../src/allow-rules.js';
+import {
+  AllowRuleStore,
+  denyOverlaps,
+  deriveRule,
+  normalizeCommandName,
+  parseRuleForCheck,
+  proposeRule,
+  readDeny,
+  toRulePath,
+} from '../src/allow-rules.js';
 import type { PermissionRequest } from '../src/permission.js';
 
 function req(tool: string, input: unknown): PermissionRequest {
@@ -17,33 +26,67 @@ function req(tool: string, input: unknown): PermissionRequest {
 describe('deriveRule', () => {
   it.each([
     ['Bash', 'git status --short', 'Bash(git status:*)'],
+    ['Bash', 'git log --oneline -5', 'Bash(git log:*)'],
+    ['Bash', 'git branch -a', 'Bash(git branch:*)'],
     ['PowerShell', 'Get-ChildItem -Force', 'PowerShell(Get-ChildItem:*)'],
+    ['PowerShell', 'get-location', 'PowerShell(Get-Location:*)'],
+    ['PowerShell', 'dir', 'PowerShell(dir:*)'],
     ['Bash', 'ls -la', 'Bash(ls:*)'],
-    ['PowerShell', 'npm view react version', 'PowerShell(npm view:*)'],
+    ['Bash', 'pwd', 'Bash(pwd:*)'],
+    // 先頭の語は正規化してから照合し、ルールは一覧の綴りで書く
+    ['PowerShell', 'git.exe status', 'PowerShell(git status:*)'],
+    ['PowerShell', 'GIT.CMD log', 'PowerShell(git log:*)'],
+    ['Bash', 'ls.exe -la', 'Bash(ls:*)'],
   ])('%s の "%s" から %s を作る', (tool, command, rule) => {
     expect(deriveRule(req(tool, { command }))).toMatchObject({ ok: true, rule });
   });
 
-  it('シェル以外はツール名だけのルールにする', () => {
-    expect(deriveRule(req('WebFetch', { url: 'https://example.com' }))).toMatchObject({ ok: true, rule: 'WebFetch' });
+  it.each([
+    // 許可リストに無いもの（中身を読む・書く・コードを実行する・ネットワーク）
+    'cat README.md',
+    'type README.md',
+    'Get-Content README.md',
+    'head -n 5 a.txt',
+    'Select-String foo a.txt',
+    'find . -name "*.ts"',
+    'env FOO=1 ls',
+    'rm -rf dist',
+    'Remove-Item foo',
+    'Format-Volume C',
+    'node script.js',
+    'python a.py',
+    'curl https://example.com',
+    'npm view react version',
+    // 正規化で剥がしても許可リストに無いもの（B-DC-01）
+    'npm.cmd test',
+    'npx.cmd x',
+    'python3.12 a.py',
+    'pip3 install x',
+    'node.exe a.js',
+  ])('"%s" からは作らない（許可リストに無い）', (command) => {
+    const result = deriveRule(req('Bash', { command }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain('許可リストに無いコマンド');
   });
 
+  it.each(['git diff', 'git show HEAD', 'git push origin main', 'git.exe push --force', 'git grep -O x', 'git -C .. status', 'git'])(
+    '"%s" からは作らない（許可リストに無いサブコマンド）',
+    (command) => {
+      const result = deriveRule(req('PowerShell', { command }));
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toContain('許可リストに無いサブコマンド');
+    }
+  );
+
   it.each([
-    ['rm -rf dist', '危険なコマンド'],
-    ['Remove-Item foo', '読み取り系でない'],
-    ['git push origin main', '危険な操作'],
-    ['npm install left-pad', '危険な操作'],
-    ['node script.js', '危険なコマンド'],
-    ['claude -p "do it" --dangerously-skip-permissions', '危険なコマンド'],
-    ['codex exec fix', '危険なコマンド'],
-    ['uvx some-tool', '危険なコマンド'],
-    ['npm test', '危険な操作'],
-    ['dotnet run', '危険な操作'],
-    ['curl https://example.com', '危険なコマンド'],
     ['git status && rm -rf /', '複数のコマンド'],
+    ['git status; rm x', '複数のコマンド'],
+    ['git status || x', '複数のコマンド'],
+    ['ls | xargs rm', '複数のコマンド'],
+    ['ls\nrm x', '複数のコマンド'],
+    ['ls $(rm x)', '複数のコマンド'],
+    ['ls `rm x`', '複数のコマンド'],
     ['echo hi > out.txt', 'リダイレクト'],
-    ['Get-Content x | Out-File y', '複数のコマンド'],
-    ['git', 'サブコマンドが取れない'],
     ['C:\\tools\\evil.exe', 'コマンド名が想定外'],
   ])('"%s" からは作らない（%s）', (command, reason) => {
     const result = deriveRule(req('Bash', { command }));
@@ -51,12 +94,53 @@ describe('deriveRule', () => {
     if (!result.ok) expect(result.reason).toContain(reason);
   });
 
+  it('WebFetch は取得先のホストに絞る', () => {
+    expect(deriveRule(req('WebFetch', { url: 'https://Example.com/a?b=1' }))).toMatchObject({
+      ok: true,
+      rule: 'WebFetch(domain:example.com)',
+    });
+    expect(deriveRule(req('WebFetch', { url: 'file:///c:/x' })).ok).toBe(false);
+    expect(deriveRule(req('WebFetch', { prompt: 'x' })).ok).toBe(false);
+  });
+
+  it.each(['mcp__github__get_issue', 'mcp__github__list_pull_requests', 'mcp__docs__searchDocs'])(
+    '名前から読み取り専用と分かる MCP のツール（%s）は、ツール名だけのルールにする',
+    (tool) => {
+      expect(deriveRule(req(tool, {}))).toMatchObject({ ok: true, rule: tool });
+    }
+  );
+
+  it.each(['WebSearch', 'Task', 'mcp__github__create_issue', 'mcp__github__get_or_create_label', 'mcp__discordbridge__download_file', 'mcp__github'])(
+    'それ以外のツール（%s）からは作らない',
+    (tool) => {
+      const result = deriveRule(req(tool, {}));
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toContain('読み取り専用と分かる MCP');
+    }
+  );
+
   it('ファイル編集のツールでも、相対パスからは作らない', () => {
     expect(deriveRule(req('Write', { file_path: 'a.txt' })).ok).toBe(false);
   });
 
   it('入力が JSON でない（省略されている）ときは作らない', () => {
     expect(deriveRule(req('Bash', '{"command":"git sta…')).ok).toBe(false);
+  });
+});
+
+describe('normalizeCommandName', () => {
+  it.each([
+    ['git', 'git'],
+    ['GIT.EXE', 'git'],
+    ['npm.cmd', 'npm'],
+    ['run.bat', 'run'],
+    ['more.com', 'more'],
+    ['Get-ChildItem.ps1', 'get-childitem'],
+    ['python3.12', 'python'],
+    ['Python3.12.exe', 'python'],
+    ['pip3', 'pip'],
+  ])('%s → %s', (word, name) => {
+    expect(normalizeCommandName(word)).toBe(name);
   });
 });
 

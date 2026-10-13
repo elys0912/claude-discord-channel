@@ -96,7 +96,7 @@ deny は常に allow より優先される（評価順は deny → ask → allow
 - 許可ユーザーの Discord アカウントが乗っ取られると、手元の Claude をそのまま操作される。Discord アカウントの多要素認証を有効にしておく。
 - 確認で許可した操作は、その内容どおりに実行される。確認の内容はよく読む。
 - 「今後も許可」で足したルールは、以後そのプレフィックスのコマンドを確認なしで実行させる（例: `Bash(git status:*)` は、`git status` に続く引数を問わない）。
-  危険なコマンドは除外しているが、要らなくなったら `!rules` から消す。
+  作れるルールは下の許可リストに限っているが、要らなくなったら `!rules` から消す。
 - `extra-mcp.json` に登録した MCP サーバーのツールは、確認なしで実行される。
 - `ciWebhooks` に書いた webhook の URL が漏れると、誰でも CI の通知のふりをして Claude に文を渡せる。中身はデータとして扱うよう指示してあるが、URL は GitHub の Secrets にだけ置き、漏れたら webhook を消して作り直す。
 - `UPLOAD_DIRS` の中のファイルは、確認なしで Discord に送られる。私物の混ざるフォルダー（Downloads や Documents 全体など）は指定せず、送る用のフォルダーを作る。
@@ -108,6 +108,28 @@ deny は常に allow より優先される（評価順は deny → ask → allow
 - 会話の内容（コードやログを含む）は、Discord 側に保存される。
 - プロジェクト側の `.claude/settings*.json` の allow は、有効なまま。
 - `.env` のトークンは平文で保存される。
+
+### 「今後も許可」で作れるルール
+
+「♾ 今後も許可」のルールは、除外の一覧（ブロックリスト）ではなく、作ってよいものの一覧（許可リスト）で決める。一覧に無い操作のカードには ♾ を出さない。
+一覧はコードの 1 か所（`src/allow-rules.ts` の `SHELL_RULE_ALLOWLIST`・`READ_ONLY_MCP_VERBS`）にまとめてあり、変えるときはこの節も直す。
+
+- **Bash / PowerShell**: 引数でファイルの中身を読めない・書けない・コードを実行しないものだけ。
+
+  | 先頭の語 | サブコマンド | 作るルール |
+  |---|---|---|
+  | `ls` / `dir` / `pwd` / `Get-Location` / `Get-ChildItem` | 問わない | `Bash(ls:*)` など |
+  | `git` | `status` / `log` / `branch` だけ | `Bash(git status:*)` など |
+
+  - 先頭の語は、小文字にし、末尾の `.exe` / `.cmd` / `.bat` / `.com` / `.ps1` と版番号（`python3.12` の `3.12`）を剥がした名前で照合する。ルールは一覧の綴りで書く（`git.exe status` からは `PowerShell(git status:*)`）。
+  - `cat` / `type` / `Get-Content` / `git diff` / `git show` / `npm` / `npx` / `node` / `python` など、一覧に無いものはすべて作らない。
+  - 複合コマンド（`;` `&&` `||` `|` 改行 `$(` バッククォート）とリダイレクトを含むものからは作らない。
+- **WebFetch**: 取得先のホストに絞った `WebFetch(domain:<ホスト>)` だけ。
+- **ツール全体を許すルール**: MCP の個別のツール（`mcp__<サーバー>__<ツール>`）で、ツール名の最初の語が `get` / `list` / `read` / `search` / `find` / `describe` / `view` / `show` のどれかで、`create` / `delete` / `send` / `download` などの書き込みの語を含まないものだけ。サーバー単位（`mcp__<サーバー>`）や組み込みのツール（`WebSearch` など）からは作らない。
+- **パスを取るツール**（Read / Grep / Glob / Edit / Write / MultiEdit / NotebookEdit）: 対象のフォルダー以下の `Read(...)` / `Edit(...)`。浅すぎるフォルダー・ホームとその親・相対パスからは作らない。
+- どのルールも、deny と照合して当たれば追加しない。
+
+限界: ルールはプレフィックスで効くので、一覧のコマンドでも引数は問わない（`git log` の `--output=<ファイル>` や `git branch -D` を含む）。MCP のツールが読み取り専用かは名前で判断するだけで、サーバーの実装は確かめていない。
 
 ### トークンが漏れたとき
 

@@ -197,14 +197,15 @@ Discord のセッションは `--strict-mcp-config` で起動する。そのた�
 **追加する** を押すと、状態ディレクトリの `allow-extra.json` に書き込む。**次に再起動したときから**、その操作は確認なしで実行される。
 起動スクリプトが `channel-settings.json` の allow に足してから Claude Code に渡すので、動いているセッションには効かない。
 
-- ルールは確認の中身から作る。自由な入力は受け付けない。
-  - Bash / PowerShell: コマンドの先頭の語をプレフィックスにする。`git` / `npm` などはサブコマンドまで含める（例: `Bash(git status:*)`）。
-  - Read / Grep / Glob: 対象のフォルダー以下の `Read` にする。例えば `C:\dev\foo\a.ts` を読んだなら `Read(//c/dev/foo/**)`。Grep / Glob は `path` のフォルダーを使う。
+- ルールは確認の中身から作る。自由な入力は受け付けない。作れるものは許可リストで決めてあり、作れない操作のカードには **♾ 今後も許可** を出さない（その場の 1 回の許可だけになる）。方式と一覧は [権限の設計とセキュリティ](security.md#今後も許可で作れるルール) に書いてある。
+  - Bash / PowerShell: 許可リストのコマンド（`ls` / `dir` / `pwd` / `Get-Location` / `Get-ChildItem` / `git status` / `git log` / `git branch`）だけ、`Bash(git status:*)` の形にする。`cat` / `Get-Content` / `git diff` / `npm` / `npx` / `node` / `python` などは作らない。
+  - Read / Grep / Glob: 対象のフォルダー以下の `Read` にする。例えば `C:\devoo.ts` を読んだなら `Read(//c/dev/foo/**)`。Grep / Glob は `path` のフォルダーを使う。
   - Edit / Write / MultiEdit / NotebookEdit: 対象のフォルダー以下の `Edit` にする（例: `Edit(//c/dev/foo/**)`）。
-  - それ以外のツール: ツール名だけにする（例: `WebFetch`）。
-- 次のものはルールを作らず、理由を返す。
-  - 複数のコマンドをつないだもの、リダイレクトを含むもの。
-  - 削除・移動・ネットワーク・プロセスの起動・権限やシステムの変更、任意のコードの実行（`node` / `python` / `npx` など）、エージェントの CLI（`claude` / `codex` / `gemini` など）、`git push` / `reset` / `clean` などの破壊的な操作、スクリプトの実行（`npm test` / `npm run` など）、読み取り系以外の PowerShell コマンドレット。
+  - WebFetch: 取得先のホストに絞る（例: `WebFetch(domain:example.com)`）。
+  - MCP の個別のツールで、名前から読み取り専用と分かるもの（`get_` / `list_` / `search_` などで始まるもの）: ツール名だけにする（例: `mcp__github__get_issue`）。
+  - それ以外のツールからは作らない。
+- 次のものもルールを作らず、理由を返す。
+  - 複数のコマンドをつないだもの（`;` `&&` `||` `|` 改行 `$(` バッククォート）、リダイレクトを含むもの。
   - パスが読み取れない・相対パス・`..` や特殊文字を含む・浅すぎる（`C:\` や `C:\dev` 直下）・ホームフォルダーそのものかその親、のどれかに当たるもの。
 - **deny に当たるものは追加しない**。`channel-settings.json` と作業フォルダーの `.claude/settings.json` / `settings.local.json` の deny と照合し、当たったら当たった deny を返す。確認したあと、追加する直前にも読み直して照合する。照合の細かい規則は Slack 版と同じ。
 - `!rules` と送ると、追加したルールを一覧する。「🗑 消すルールを選ぶ」のメニューで選ぶと消せる（次に再起動したときから反映）。一覧のメニューの有効期限は10分。

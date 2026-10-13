@@ -75,7 +75,7 @@ GitHub Actions（`.github/workflows/ci.yml`）は、main への push と pull re
 | `src/console.ts` | ターミナル画面の読み取りと選択キーの送信（`scripts/console.ps1` の呼び出し） |
 | `src/screen.ts` | 画面のテキストから選択画面を取り出す（純関数） |
 | `src/screen-relay.ts` | `!screen` と選択肢メニューの処理 |
-| `src/allow-rules.ts` | 「今後も許可」のルールの生成、危険な操作の除外、deny との照合、保存 |
+| `src/allow-rules.ts` | 「今後も許可」のルールの生成（許可リスト）、deny との照合、保存 |
 | `src/rule-relay.ts` | 「今後も許可」の提案・確認と、`!rules` の処理 |
 | `src/config.ts` | 状態ディレクトリ、`.env` のパーサー、`access.json` の検証 |
 | `src/format.ts` | 送信前のテキストの整形（一斉メンションの無害化） |
