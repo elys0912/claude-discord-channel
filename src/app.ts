@@ -7,6 +7,7 @@ import type { DiscordBridge, ActionContext, InboundRef } from './discord.js';
 import { ChannelServer } from './mcp.js';
 import type { McpDeps } from './mcp.js';
 import { PermissionRelay } from './permission-relay.js';
+import { fence } from './card.js';
 import { revealInvisible } from './permission.js';
 import type { ActionParse } from './permission.js';
 import type { GateResult } from './gate.js';
@@ -45,12 +46,12 @@ export const REACTION = {
 // --- 依存の型（テストで差し替えられるよう、使うメソッドだけに絞る） -------------
 
 /** MCP ツール（reply / react / edit_message）が使う Discord 側の操作 */
-export type ToolBridge = Pick<DiscordBridge, 'postText' | 'addReaction' | 'updateText'>;
+export type ToolBridge = Pick<DiscordBridge, 'postText' | 'addReactionOrThrow' | 'updateText'>;
 
 /** 受信処理・起動停止まで含めた Discord 側の操作 */
 export type AppBridge = Pick<
   DiscordBridge,
-  'start' | 'stop' | 'postText' | 'postCard' | 'addReaction' | 'updateText' | 'postToAll' | 'updateCard' | 'sendFiles' | 'sendTyping'
+  'start' | 'stop' | 'postText' | 'postCard' | 'addReaction' | 'addReactionOrThrow' | 'updateText' | 'postToAll' | 'updateCard' | 'sendFiles' | 'sendTyping'
 > &
   Partial<Pick<DiscordBridge, 'isConnected' | 'setPresence'>>;
 
@@ -126,6 +127,15 @@ export function assertNever(value: never): never {
 /** キャッシュのつなぎ止めで Claude に送る本文（INSTRUCTIONS に、ツールを呼ばず ok とだけ書くよう書いてある） */
 export const KEEPALIVE_TEXT = 'keepalive（キャッシュのつなぎ止め。ツールを呼ばずに ok とだけ書く）';
 
+/** Gateway が回復できずに閉じたとき Claude に送る本文（INSTRUCTIONS に、ターミナルに書いて終えるよう書いてある） */
+export function gatewayLostText(detail: string): string {
+  return [
+    `Discord との接続が回復できない理由で切れ、ブリッジは再接続しない（${detail}）。`,
+    'Discord からのメッセージは届かず、Discord のツールも使えない。',
+    'ボットのトークンが無効になった、または Developer Portal で Intent が OFF になった可能性がある。設定を確かめてから起動し直す。',
+  ].join('\n');
+}
+
 /** `!help` の文面 */
 export const HELP_TEXT = [
   '📖 ブリッジのコマンド（Claude には渡さず、ブリッジが処理する。Claude が止まっていても使える。`!` の代わりに `/` で始めると、補完から選べる）',
@@ -180,7 +190,8 @@ export type ToolHandlers = Pick<McpDeps, 'onReply' | 'onReact' | 'onEdit' | 'onD
 
 /**
  * reply / react / edit_message / download_file / send_file / progress の実体。失敗しても投げず、Claude が読めるエラー文を返す。
- * onActivity はツールが呼ばれるたびに（成否によらず）呼ぶ。無応答の見張りを解くのに使う。
+ * onActivity は返事にあたるツール（reply / react / edit_message / send_file）が呼ばれるたびに（成否によらず）呼ぶ。無応答の見張りを解くのに使う。
+ * download_file と progress は作業の途中で呼ぶものなので、見張りは解かない（返事をせずに終えたら、無応答の警告を出す）。
  * download / files / todo が無ければ、download_file / send_file / progress は出さない。
  */
 export function createToolHandlers(
@@ -191,8 +202,8 @@ export function createToolHandlers(
   files?: Pick<FileSender, 'send'>,
   todo?: Pick<TodoBoard, 'update'>
 ): ToolHandlers {
-  const run = async (tool: string, action: () => Promise<string>): Promise<string> => {
-    onActivity?.();
+  const run = async (tool: string, action: () => Promise<string>, isAnswer = true): Promise<string> => {
+    if (isAnswer) onActivity?.();
     try {
       return await action();
     } catch (e) {
@@ -210,7 +221,7 @@ export function createToolHandlers(
 
     onReact: ({ chat_id, message_id, emoji, thread_id }) =>
       run('react', async () => {
-        await bridge.addReaction(chat_id, message_id, normalizeEmoji(emoji), thread_id);
+        await bridge.addReactionOrThrow(chat_id, message_id, normalizeEmoji(emoji), thread_id);
         return 'reacted';
       }),
 
@@ -227,7 +238,7 @@ export function createToolHandlers(
             const result = await downloadAttachment(download, ref, extract ?? false);
             logger.info(`download_file attachment=${attachment_id} extract=${extract ?? false}`);
             return result;
-          })
+          }, false)
       : undefined,
 
     onSendFile: files ? (args) => run('send_file', () => files.send(args)) : undefined,
@@ -238,7 +249,7 @@ export function createToolHandlers(
             const how = await todo.update({ channel: chat_id, threadTs: thread_id }, items);
             const done = items.filter((i) => i.status === 'completed').length;
             return `${how === 'posted' ? 'posted' : 'updated'} (${done}/${items.length} completed)`;
-          })
+          }, false)
       : undefined,
   };
 }
@@ -484,11 +495,11 @@ function pressedMessage(ctx: ActionContext): PressedMessage | undefined {
 }
 
 /**
- * input_preview をコードブロックで包む。中身の行頭の ``` はゼロ幅スペースを前置して、
- * フェンスの開閉と誤認されない（分割送信時の開き直しも崩れない）ようにする。
+ * input_preview をコードブロックで包む。中身の ``` は card.ts の fence が分けるので、
+ * フェンスの開閉と誤認されない（分割送信時の開き直しも崩れない）。
  */
 export function fencePreview(preview: string): string {
-  return '```\n' + preview.replace(/^```/gm, '\u200b```') + '\n```';
+  return fence(preview);
 }
 
 /**
@@ -788,6 +799,7 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
       onAction: (parsed, ctx) => handleAction(wiring, parsed, ctx),
       onCommand: (command, ctx) => handleSlashCommand(wiring, command, ctx),
       isKnownRequest: (id) => relay.lookup(id) !== undefined,
+      onGatewayLost: (detail) => server.pushMessage(gatewayLostText(detail), { kind: 'bridge_error' }),
     });
   } catch (e) {
     await stop().catch((err: unknown) => logger.error('起動失敗後の後片付けで例外', err));

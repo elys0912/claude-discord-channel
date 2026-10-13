@@ -237,6 +237,17 @@ describe('PermissionRelay', () => {
       expect(relay.pendingCount()).toBe(0);
     });
 
+    it('自動許可の記録も不可視文字を見えるようにし、サロゲートペアの途中で切らない', async () => {
+      const sessionAllow = new SessionAllowAll(() => []);
+      sessionAllow.enable('U1');
+      const { relay, replies } = setup(() => 0, { sessionAllow });
+      relay.rememberThread('C1', '77');
+      await relay.request({ ...REQ, request_id: 'fghij', input_preview: 'rm \u202E/' + 'a'.repeat(294) + '😀b' });
+      const code = replies[0]?.card.code ?? '';
+      expect(code.startsWith('rm \\u{202E}/')).toBe(true);
+      expect(code.endsWith('a…')).toBe(true);
+    });
+
     it('ask に当たる操作は、有効でもボタンで聞く', async () => {
       const sessionAllow = new SessionAllowAll(() => ['Write']);
       sessionAllow.enable('U1');

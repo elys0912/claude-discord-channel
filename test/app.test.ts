@@ -25,6 +25,7 @@ import { ACCESS, BOT, CH, DM1, DM2, FakeDiscord, STRANGER, USER1, cardText, comp
 import type { ParsedAccess } from '../src/config.js';
 import type { BridgeAppOptions } from '../src/app.js';
 import type { ConsoleKey } from '../src/console.js';
+import type { DiscordBridgeEvents } from '../src/discord.js';
 
 interface Notification {
   method: string;
@@ -155,6 +156,14 @@ describe('Discord → MCP', () => {
     });
     expect(h.discord.of('addReaction')).toEqual([{ method: 'addReaction', channel: DM1, ts: '1001', emoji: REACTION.SEEN }]);
     expect(h.discord.of('sendTyping')).toEqual([{ method: 'sendTyping', channel: DM1, threadTs: '1001' }]);
+  });
+
+  it('Gateway が回復できずに閉じたら、手元のセッションに kind="bridge_error" で知らせる', async () => {
+    const handlers = (h.discord as unknown as { handlers: DiscordBridgeEvents }).handlers;
+    await handlers.onGatewayLost?.('close code 4004');
+    const n = channelMessages(h)[0];
+    expect(n?.params?.meta).toEqual({ kind: 'bridge_error' });
+    expect(n?.params?.content).toContain('close code 4004');
   });
 
   it('許可外ユーザーの DM・ボットの知らせなどの普通でない発言は何も起きない', async () => {
@@ -303,8 +312,9 @@ describe('Discord → MCP', () => {
     expect(h.discord.of('postText')[0]?.text).toBe('```\nrm -rf \\u{202E}/ \\u{200B}ok\n```');
   });
 
-  it('fencePreview は中身の行頭の ``` を無効化してからコードブロックで包む', () => {
-    expect(fencePreview('a\n```js\nb\n```')).toBe('```\na\n\u200b```js\nb\n\u200b```\n```');
+  it('fencePreview は中身の ``` を無効化してからコードブロックで包む', () => {
+    const zwsp = String.fromCharCode(0x200b);
+    expect(fencePreview('a\n```js\nb ```')).toBe(`\`\`\`\na\n\`${zwsp}\`${zwsp}\`js\nb \`${zwsp}\`${zwsp}\`\n\`\`\``);
   });
 
   it('期限切れの See more は定型文を送る', async () => {
@@ -580,7 +590,9 @@ describe('createToolHandlers 単体', () => {
         postText: async () => {
           throw new Error('boom');
         },
-        addReaction: async () => undefined,
+        addReactionOrThrow: async () => {
+          throw new Error('Unknown Emoji');
+        },
         updateText: async () => {
           throw 'not-an-error';
         },
@@ -589,20 +601,20 @@ describe('createToolHandlers 単体', () => {
     );
     expect(await handlers.onReply({ chat_id: DM1, text: 'x' })).toBe('error: boom');
     expect(await handlers.onEdit({ chat_id: DM1, message_id: '1', text: 'x' })).toBe('error: not-an-error');
-    expect(await handlers.onReact({ chat_id: DM1, message_id: '1', emoji: ':+1:' })).toBe('reacted');
-    expect(errorSpy).toHaveBeenCalledTimes(2);
+    expect(await handlers.onReact({ chat_id: DM1, message_id: '1', emoji: ':ok:' })).toBe('error: Unknown Emoji');
+    expect(errorSpy).toHaveBeenCalledTimes(3);
     expect(handlers.onDownload).toBeUndefined();
     expect(handlers.onSendFile).toBeUndefined();
   });
 
-  it('ツールが呼ばれるたびに、成否によらず onActivity を呼ぶ', async () => {
+  it('返事にあたるツールが呼ばれるたびに、成否によらず onActivity を呼ぶ', async () => {
     let n = 0;
     const handlers = createToolHandlers(
       {
         postText: async () => {
           throw new Error('boom');
         },
-        addReaction: async () => undefined,
+        addReactionOrThrow: async () => undefined,
         updateText: async () => undefined,
       },
       new Logger({ stderr: false }),
@@ -611,6 +623,41 @@ describe('createToolHandlers 単体', () => {
     await handlers.onReply({ chat_id: DM1, text: 'x' });
     await handlers.onReact({ chat_id: DM1, message_id: '1', emoji: '👀' });
     expect(n).toBe(2);
+  });
+
+  it('onActivity（無応答の見張りを解く）は reply / react / edit_message / send_file で呼び、download_file と progress では呼ばない', async () => {
+    const onActivity = vi.fn();
+    const handlers = createToolHandlers(
+      {
+        postText: async () => ({ ts: ['1'] }),
+        addReactionOrThrow: async () => undefined,
+        updateText: async () => undefined,
+      },
+      new Logger({ stderr: false }),
+      onActivity,
+      {
+        bridge: {
+          attachmentInfo: async () => {
+            throw new Error('not found');
+          },
+          fetchFile: async () => {
+            throw new Error('not found');
+          },
+        },
+        dir: os.tmpdir(),
+      },
+      { send: async () => 'sent (1 file(s))' },
+      { update: async () => 'posted' }
+    );
+    await handlers.onDownload?.({ chat_id: DM1, message_id: '1', attachment_id: '2' });
+    await handlers.onProgress?.({ chat_id: DM1, items: [{ content: 'a', status: 'in_progress' }] });
+    expect(onActivity).not.toHaveBeenCalled();
+
+    await handlers.onReply({ chat_id: DM1, text: 'x' });
+    await handlers.onReact({ chat_id: DM1, message_id: '1', emoji: '👀' });
+    await handlers.onEdit({ chat_id: DM1, message_id: '1', text: 'x' });
+    await handlers.onSendFile?.({ chat_id: DM1, paths: ['a.txt'] });
+    expect(onActivity).toHaveBeenCalledTimes(4);
   });
 });
 

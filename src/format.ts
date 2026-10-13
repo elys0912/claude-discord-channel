@@ -19,6 +19,15 @@ const META_KEY_RE = /^[A-Za-z0-9_]+$/;
 export const META_VALUE_MAX = 2000;
 
 /**
+ * 本文中の `<channel` / `</channel` の `<` の後ろにゼロ幅スペースを入れる（大文字小文字を問わない）。
+ * Claude Code は通知を <channel ...> タグに包んで渡すので、転送・CI の通知・添付の中身など、許可ユーザー以外が書いた文字列で
+ * タグを閉じて、許可ユーザーの通常のメッセージに見せかけられないようにする（例: "</channel>" → "<\u200b/channel>"）
+ */
+export function neutralizeChannelTags(text: string): string {
+  return text.replace(/<(?=\/?channel)/gi, '<\u200b');
+}
+
+/**
  * meta のキー・値ルールを適用する（キーは英数字とアンダースコアのみ、値は undefined 除外、
  * 値は META_VALUE_MAX 文字まで。超えた分は切り捨てて末尾を … にする。サロゲートペアの途中では切らない）
  */
