@@ -141,8 +141,48 @@ describe('DiscordBridge のメッセージの在りか（thread_id の検証）'
     });
     const client = (bridge as unknown as { client: { channels: { fetch: (id: string) => Promise<unknown> } } }).client;
     client.channels.fetch = async (id: string) => channels[id] ?? null;
-    return { bridge, touched };
+    return { bridge, touched, client, channels, channel };
   }
+
+  it('thread_id のチャンネルの取得が失敗（reject）したら、許可した会話で操作する（D-DC-05）', async () => {
+    const { bridge, touched, client, channels } = setup();
+    client.channels.fetch = async (id: string) => {
+      if (id === THREAD) throw new Error('Missing Access');
+      return channels[id] ?? null;
+    };
+    await bridge.addReaction(ALLOWED, MESSAGE, '👍', THREAD);
+    await bridge.updateText(ALLOWED, MESSAGE, 'x', THREAD);
+    expect(touched).toEqual([
+      { channel: ALLOWED, op: 'react' },
+      { channel: ALLOWED, op: 'edit' },
+    ]);
+  });
+
+  it('DM では thread_id を使わず、取りにも行かない（D-DC-05）', async () => {
+    const DM = '500000000000000020';
+    const { bridge, touched, client, channels, channel } = setup();
+    channels[DM] = channel(DM, { thread: false });
+    // init() で DM を開いたときと同じ状態にする
+    const internals = bridge as unknown as { dmChannels: Map<string, string>; allowedConversations: Set<string> };
+    internals.dmChannels.set('200000000000000001', DM);
+    internals.allowedConversations.add(DM);
+    const fetched: string[] = [];
+    const original = client.channels.fetch;
+    client.channels.fetch = async (id: string) => {
+      fetched.push(id);
+      return original(id);
+    };
+    await bridge.addReaction(DM, MESSAGE, '👍', THREAD);
+    expect(touched).toEqual([{ channel: DM, op: 'react' }]);
+    expect(fetched).not.toContain(THREAD);
+  });
+
+  it('在りかを覚えているメッセージは、thread_id によらず覚えた場所で操作する（D-DC-05）', async () => {
+    const { bridge, touched } = setup();
+    (bridge as unknown as { locations: { set: (k: string, v: string) => void } }).locations.set(MESSAGE, THREAD);
+    await bridge.addReaction(ALLOWED, MESSAGE, '👍', FOREIGN_THREAD);
+    expect(touched).toEqual([{ channel: THREAD, op: 'react' }]);
+  });
 
   it('許可した会話の中のスレッドなら、thread_id のチャンネルで操作する', async () => {
     const { bridge, touched } = setup();

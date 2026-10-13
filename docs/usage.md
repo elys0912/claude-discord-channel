@@ -195,20 +195,24 @@ Discord のセッションは `--strict-mcp-config` で起動する。そのた�
 
 実行許可のカードの **♾ 今後も許可** を押すと、今回の操作を許可したうえで、同じ種類の操作を許可リストに足すかを確かめるカードを出す。
 **追加する** を押すと、状態ディレクトリの `allow-extra.json` に書き込む。**次に再起動したときから**、その操作は確認なしで実行される。
-起動スクリプトが `channel-settings.json` の allow に足してから Claude Code に渡すので、動いているセッションには効かない。
+起動スクリプトが `channel-settings.json` の allow に足してから Claude Code に渡すので、動いているセッションには効かない。`!restart` で起動し直したときも、足し直してから渡す（`!rules` で消したものも、その時点で外れる）。
 
 - ルールは確認の中身から作る。自由な入力は受け付けない。作れるものは許可リストで決めてあり、作れない操作のカードには **♾ 今後も許可** を出さない（その場の 1 回の許可だけになる）。方式と一覧は [権限の設計とセキュリティ](security.md#今後も許可で作れるルール) に書いてある。
-  - Bash / PowerShell: 許可リストのコマンド（`ls` / `dir` / `pwd` / `Get-Location` / `Get-ChildItem` / `git status` / `git log` / `git branch`）だけ、`Bash(git status:*)` の形にする。`cat` / `Get-Content` / `git diff` / `npm` / `npx` / `node` / `python` などは作らない。
+  - Bash / PowerShell: 一覧のコマンド（`git status` / `pwd` / `Get-Location` / `ls` / `dir`）を引数を付けずに呼んだものだけ、完全一致のルールにする（例: `Bash(git status)`、`PowerShell(Get-Location)`）。`:*` は付けないので、引数付きの呼び出しには効かない。
+    - 引数付きの呼び出し（`ls C:\x`・`git status --short` など）、`git log` / `git branch` / `Get-ChildItem`、`cat` / `type` / `Get-Content` / `git diff` / `git show` / `npm` / `npx` / `node` / `python` などからは作らない。
+    - 綴りが大文字小文字を除いて一覧と同じときだけ作り、ルールには一覧の綴りを使う。`git.exe` / `ls.cmd` のような拡張子付き・版番号付き・引用符付きの名前からは作らない。
+    - 複数のコマンドをつないだもの（`;` / `&&` / `||` / `|` / `&` / 改行 / `$(` / バッククォート）や、リダイレクトを含むものからは作らない。
   - Read / Grep / Glob: 対象のフォルダー以下の `Read` にする。例えば `C:\dev\foo\a.ts` を読んだなら `Read(//c/dev/foo/**)`。Grep / Glob は `path` のフォルダーを使う。
   - Edit / Write / MultiEdit / NotebookEdit: 対象のフォルダー以下の `Edit` にする（例: `Edit(//c/dev/foo/**)`）。
-  - WebFetch: 取得先のホストに絞る（例: `WebFetch(domain:example.com)`）。
-  - MCP の個別のツールで、名前から読み取り専用と分かるもの（`get_` / `list_` / `search_` などで始まるもの）: ツール名だけにする（例: `mcp__github__get_issue`）。
+  - WebFetch: URL のホストに絞った `WebFetch(domain:<ホスト>)` にする。ホストに `*` を含むもの・IPv6 の `[::1]` などからは作らない。ツール全体の `WebFetch` は作らない。
+  - MCP のツール: 名前から読み取り専用と分かる個別のツールだけ、ツール名のルールにする（例: `mcp__github__get_issue`）。ツール名（頭にサーバー名が付いていれば除く）を語に分け、最初の語が `get` / `list` / `read` / `search` / `find` / `describe` / `view` / `show` で、`create` / `delete` / `send` / `download` / `or` / `and` などの書き込みの語を含まないもの。
   - それ以外のツールからは作らない。
 - 次のものもルールを作らず、理由を返す。
-  - 複数のコマンドをつないだもの（`;` `&&` `||` `|` 改行 `$(` バッククォート）、リダイレクトを含むもの。
+  - 複数のコマンドをつないだもの（`;` `&&` `||` `|` `&` 改行 `$(` バッククォート）、リダイレクトを含むもの。
   - パスが読み取れない・相対パス・`..` や特殊文字を含む・浅すぎる（`C:\` や `C:\dev` 直下）・ホームフォルダーそのものかその親、のどれかに当たるもの。
 - **deny に当たるものは追加しない**。`channel-settings.json` と作業フォルダーの `.claude/settings.json` / `settings.local.json` の deny と照合し、当たったら当たった deny を返す。確認したあと、追加する直前にも読み直して照合する。照合の細かい規則は Slack 版と同じ。
-- `!rules` と送ると、追加したルールを一覧する。「🗑 消すルールを選ぶ」のメニューで選ぶと消せる（次に再起動したときから反映）。一覧のメニューの有効期限は10分。
+- `!rules` と送ると、追加したルールを一覧する。「🗑 消すルールを選ぶ」のメニューで選ぶと消せる（次に再起動したときから反映。`!restart` を含む）。一覧のメニューの有効期限は10分。
+- 前の版で足したルールのうち、今の方式では作れないもの（`Bash(git log:*)`・`PowerShell(npm.cmd:*)`・ツール全体の `WebFetch` など）は、起動のたびに allow に入れずに外し、Discord とターミナルに一覧を出す。`allow-extra.json` は書き換えないので、更新したら `!rules` で確かめて消す。
 - 追加と削除はログ（`許可リストに追加` / `許可リストから削除`）に残る。
 
 ## このセッション中は全部許可（🔓）
@@ -216,13 +220,24 @@ Discord のセッションは `--strict-mcp-config` で起動する。そのた�
 `.env` に `SESSION_ALLOW_ALL=on` を書いたボットだけ、実行許可のカードに **🔓 このセッション中は全部許可** ボタンが出る。
 押すと今回を許可したうえで、以後の実行許可にはブリッジが自動で allow を返す（カードは出さない）。
 
-- `channel-settings.json`（`-SettingsFile` で渡したもの）と作業フォルダーの `.claude/settings.json` / `settings.local.json`、managed settings（組織の管理設定。`C:\Program Files\ClaudeCode\managed-settings.json` と `managed-settings.d\*.json`）の ask に当たる操作は自動許可から外し、今までどおりカードで確かめる。判断できないものは、安全側に倒して当たると判定する。
-  - シェルのコマンドは、`;` `&&` `||` `|` `&` 改行 `$(` バッククォートで分けた部分ごとに照合する（`cd repo && git push` も `Bash(git push:*)` に当たる）。先頭の語は小文字にし、`.exe` / `.cmd` などの拡張子と版番号を剥がして比べる。
-  - 先頭が環境変数の代入（`FOO=1 ...`）・ラッパー（`env` / `sudo` / `sh` / `cmd` / `powershell` / `iex` など）・引用符やパスの付いたコマンドの部分と、ワイルドカードを含む ask（`Bash(git * --force)` など）は、解釈できないので当たりにする。
-  - `mcp__<サーバー>` と `mcp__<サーバー>__*` の ask は、そのサーバーの全ツールに当たる。形の読めない ask は、どの操作にも当たりにする。
-  - これらの設定ファイルのどれかが読めない・JSON でないときは、何を外すべきか判断できないので、全部許可のボタンを出さない。
+- 次のファイルの ask に当たる操作は自動許可から外し、今までどおりカードで確かめる。
+  - `channel-settings.json`（`-SettingsFile` で渡したもの）
+  - 作業フォルダーの `.claude/settings.json` / `settings.local.json`
+  - managed settings（組織の管理設定）の `managed-settings.json` と `managed-settings.d\*.json`。Windows では `C:\Program Files\ClaudeCode` と、古い版の置き場所の `C:\ProgramData\ClaudeCode` の両方を読む（版ごとの置き場所は確かめていないので、どちらに在っても読む）。
+  - これらのどれかが読めない・JSON でないときは、何を外すべきか判断できないので、全部許可のボタンを出さない。
   - レジストリ（`HKLM\SOFTWARE\Policies\ClaudeCode` など）やサーバーから配られる managed settings は読まない。組織がそれらで ask を配っている PC では、`SESSION_ALLOW_ALL` を使わない。
 - deny に当たる操作は、Claude Code が確認を出す前に止める。だから全部許可の間も実行されない。
+- ask との照合は次のとおり。判断できないものは、安全側に倒して当たると判定する（確認が出るだけ）。
+  - ツール全体のルールは、そのツールのすべてのリクエストに当たる。`mcp__<サーバー>` と `mcp__<サーバー>__*` は、そのサーバーの全ツールに当たる。
+  - シェルの中身付きのルールは、コマンドを `;` / `&&` / `||` / `|` / `&` / 改行 / `$(` / バッククォートで分け、どれかの部分にそのプレフィックスの語の並びがあるときに当たる（例: `Bash(git push:*)` は `cd repo && git push` にも `echo git push` にも当たる）。
+    語はバックスラッシュを取り除き、コマンド名は小文字にして末尾の `.exe` / `.cmd` などと版番号を剥がして比べる（`git.exe push`・`git pus\h` も当たる）。行の継続（`\` + 改行、バッククォート + 改行）は、つないでから分ける。
+  - 次のものは、コマンドの組み立てを解釈しないので当たると判定する。
+    - 引用符（`"` / `'`）・バッククォート・波かっこ・丸かっこを含むコマンド（`git "push"`、`if ($true) { git push }`、`(git status)`）
+    - 制御構文の語（`if` / `then` / `for` / `foreach` / `while` / `do` / `try` など）や、スクリプトブロックを取るコマンドレット（`ForEach-Object` / `%` / `Where-Object`）を含むコマンド
+    - 部分の先頭が環境変数の代入（`FOO=1 git push`）、ラッパー（`sudo` / `env` / `sh` / `cmd` / `powershell` / `Invoke-Expression` / `Start-Job` / `runas` / `npx` など）、パスで始まる語のもの
+    - コマンド名の後ろがオプション（`git -C x push`）か、展開で変わりうる語（`git $x`・`git pu*`）のもの
+  - `Read` / `Edit` の中身付きのルールは、パスがそのフォルダー以下（`//`・`~/`・`./`・`/` 基準）のときに当たる。ファイル名だけのルール（`.env`・`*.pem`）なら、名前が一致するときに当たる。
+  - 判断できないもの（コマンドやパスが読めない、途中にワイルドカードがあるパターン（シェル・パスとも）、ほかのツールの中身付きのルール、形の読めないルール）も当たると判定する。
 - 自動で許可した操作は、最後に話しかけた場所に「🔓 自動許可: ツール名」と入力の先頭を残す。
 - 解除されるのは、`!lock` を送ったとき、`!clear` などで新しい会話になったとき、ブリッジが終了したとき（再起動・`!restart` を含む）。`/compact` では解除しない。
 - `!status` に「全部許可: 有効（○時から）／無効」を出す。

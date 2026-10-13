@@ -18,7 +18,7 @@ import { ResponseWatchdog, buildNoResponseText } from './watchdog.js';
 import type { ConsoleAccess } from './console.js';
 import { ScreenRelay, noticeCard } from './screen-relay.js';
 import { RuleRelay } from './rule-relay.js';
-import { AllowRuleStore, readAsk, readDeny } from './allow-rules.js';
+import { AllowRuleStore, buildRejectedRulesText, partitionStoredRules, readAsk, readDeny } from './allow-rules.js';
 import { SessionAllowAll } from './session-allow.js';
 import { downloadAttachment } from './download.js';
 import type { DownloadDeps } from './download.js';
@@ -795,10 +795,24 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
   }
   logger.info('Discord ブリッジ稼働中');
   // 起動の途中で終了処理（stdin の終了など）が始まっていたら、それ以上は始めない（止めた後に投稿やタイマーを残さない）
+  if (stopped === undefined && ruleStore) await noticeRejectedRules(ruleStore, notice, logger);
   if (stopped === undefined) await inbox?.start();
   if (stopped === undefined) presence?.start();
 
   return { stop };
+}
+
+/**
+ * allow-extra.json のうち、今の方式では作れないルール（前の方式で足したもの）を知らせる。
+ * start.ps1 はこれらを allow に入れていない（dist/src/allow-extra-check.js と同じ判定）
+ */
+async function noticeRejectedRules(store: AllowRuleStore, notice: NoticePoster, logger: Logger): Promise<void> {
+  const { rejected } = partitionStoredRules(store.list());
+  const text = buildRejectedRulesText(rejected);
+  if (text === undefined) return;
+  logger.warn(`今の方式では作れない保存済みのルール ${rejected.length} 件を allow に入れていない: ${rejected.join(', ')}`);
+  process.stderr.write(`[discordbridge] ${text}\n`);
+  await notice.post(text);
 }
 
 export interface DegradedAppOptions {

@@ -60,21 +60,21 @@ describe('RuleRelay', () => {
     const { relay, rules, posts, pressed } = setup();
     await relay.propose(bash('git status'), 'C1', '90');
     expect(posts[0]?.kind).toBe('card');
-    expect(posts[0]?.text).toContain('Bash(git status:*)');
+    expect(posts[0]?.text).toContain('Bash(git status)');
     expect(posts[0]?.card?.buttons?.flat().map((b) => [b.label, b.id])).toEqual([
       ['追加する', 'rule:add:prop0001'],
       ['やめる', 'rule:cancel:prop0001'],
     ]);
 
     await relay.confirm('prop0001', true, pressed, 'U1');
-    expect(rules).toEqual(['Bash(git status:*)']);
+    expect(rules).toEqual(['Bash(git status)']);
     expect(posts.at(-1)?.kind).toBe('update');
-    expect(posts.at(-1)?.text).toContain('追加した: Bash(git status:*)');
+    expect(posts.at(-1)?.text).toContain('追加した: Bash(git status)');
   });
 
   it('既にあるルールは確認を出さず、その旨を返す', async () => {
     const { relay, rules, posts } = setup();
-    rules.push('Bash(git status:*)');
+    rules.push('Bash(git status)');
     await relay.propose(bash('git status'), 'C1', '90');
     expect(posts).toEqual([{ kind: 'text', text: expect.stringContaining('既に許可リストにある') }]);
   });
@@ -103,7 +103,7 @@ describe('RuleRelay', () => {
     const { relay, posts } = setup();
     await relay.propose(bash('rm -rf dist'), 'C1', '90');
     expect(posts[0]?.kind).toBe('text');
-    expect(posts[0]?.text).toContain('許可リストに無いコマンド');
+    expect(posts[0]?.text).toContain('許可リストのコマンドを引数なしで呼んだものではない');
   });
 
   it('やめる・期限切れでは保存しない', async () => {
