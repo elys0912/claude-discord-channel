@@ -102,6 +102,117 @@ describe('DiscordBridge の送り先（フォーラムとスレッド）', () =>
   });
 });
 
+describe('DiscordBridge のメッセージの在りか（thread_id の検証）', () => {
+  const ALLOWED = '500000000000000010';
+  const THREAD = '600000000000000011';
+  const FOREIGN = '700000000000000012';
+  const FOREIGN_THREAD = '700000000000000013';
+  const MESSAGE = '800000000000000014';
+  const ATTACHMENT = '900000000000000015';
+
+  /** client.channels.fetch を差し替えた DiscordBridge。どのチャンネルで操作したかを touched に残す */
+  function setup() {
+    const touched: { channel: string; op: string }[] = [];
+    const channel = (id: string, opts: { thread: boolean; parentId?: string }) => ({
+      id,
+      parentId: opts.parentId ?? null,
+      type: opts.thread ? ChannelType.PublicThread : ChannelType.GuildText,
+      isThread: () => opts.thread,
+      isSendable: () => true,
+      messages: {
+        react: async () => void touched.push({ channel: id, op: 'react' }),
+        edit: async () => void touched.push({ channel: id, op: 'edit' }),
+        fetch: async () => {
+          touched.push({ channel: id, op: 'fetch' });
+          return { attachments: new Map([[ATTACHMENT, { id: ATTACHMENT, name: 'a.txt', size: 1, contentType: null, url: 'https://cdn.discordapp.com/a' }]]) };
+        },
+      },
+    });
+    const channels: Record<string, unknown> = {
+      [ALLOWED]: channel(ALLOWED, { thread: false }),
+      [THREAD]: channel(THREAD, { thread: true, parentId: ALLOWED }),
+      [FOREIGN]: channel(FOREIGN, { thread: false }),
+      [FOREIGN_THREAD]: channel(FOREIGN_THREAD, { thread: true, parentId: FOREIGN }),
+    };
+    const bridge = new DiscordBridge({
+      token: 'unused',
+      access: { guildId: '100000000000000001', allowFrom: ['200000000000000001'], channels: [ALLOWED] },
+      logger: new Logger({ stderr: false }),
+    });
+    const client = (bridge as unknown as { client: { channels: { fetch: (id: string) => Promise<unknown> } } }).client;
+    client.channels.fetch = async (id: string) => channels[id] ?? null;
+    return { bridge, touched, client, channels, channel };
+  }
+
+  it('thread_id のチャンネルの取得が失敗（reject）したら、許可した会話で操作する（D-DC-05）', async () => {
+    const { bridge, touched, client, channels } = setup();
+    client.channels.fetch = async (id: string) => {
+      if (id === THREAD) throw new Error('Missing Access');
+      return channels[id] ?? null;
+    };
+    await bridge.addReaction(ALLOWED, MESSAGE, '👍', THREAD);
+    await bridge.updateText(ALLOWED, MESSAGE, 'x', THREAD);
+    expect(touched).toEqual([
+      { channel: ALLOWED, op: 'react' },
+      { channel: ALLOWED, op: 'edit' },
+    ]);
+  });
+
+  it('DM では thread_id を使わず、取りにも行かない（D-DC-05）', async () => {
+    const DM = '500000000000000020';
+    const { bridge, touched, client, channels, channel } = setup();
+    channels[DM] = channel(DM, { thread: false });
+    // init() で DM を開いたときと同じ状態にする
+    const internals = bridge as unknown as { dmChannels: Map<string, string>; allowedConversations: Set<string> };
+    internals.dmChannels.set('200000000000000001', DM);
+    internals.allowedConversations.add(DM);
+    const fetched: string[] = [];
+    const original = client.channels.fetch;
+    client.channels.fetch = async (id: string) => {
+      fetched.push(id);
+      return original(id);
+    };
+    await bridge.addReaction(DM, MESSAGE, '👍', THREAD);
+    expect(touched).toEqual([{ channel: DM, op: 'react' }]);
+    expect(fetched).not.toContain(THREAD);
+  });
+
+  it('在りかを覚えているメッセージは、thread_id によらず覚えた場所で操作する（D-DC-05）', async () => {
+    const { bridge, touched } = setup();
+    (bridge as unknown as { locations: { set: (k: string, v: string) => void } }).locations.set(MESSAGE, THREAD);
+    await bridge.addReaction(ALLOWED, MESSAGE, '👍', FOREIGN_THREAD);
+    expect(touched).toEqual([{ channel: THREAD, op: 'react' }]);
+  });
+
+  it('許可した会話の中のスレッドなら、thread_id のチャンネルで操作する', async () => {
+    const { bridge, touched } = setup();
+    await bridge.addReaction(ALLOWED, MESSAGE, '👍', THREAD);
+    await bridge.updateText(ALLOWED, MESSAGE, 'x', THREAD);
+    await bridge.attachmentInfo({ chatId: ALLOWED, messageId: MESSAGE, attachmentId: ATTACHMENT, threadId: THREAD });
+    expect(touched).toEqual([
+      { channel: THREAD, op: 'react' },
+      { channel: THREAD, op: 'edit' },
+      { channel: THREAD, op: 'fetch' },
+    ]);
+  });
+
+  it.each([
+    ['許可外のチャンネル', FOREIGN],
+    ['許可外のチャンネルのスレッド', FOREIGN_THREAD],
+    ['存在しないチャンネル', '700000000000000099'],
+  ])('thread_id が%sなら使わず、許可した会話で操作する（react / edit_message / download_file）', async (_label, threadId) => {
+    const { bridge, touched } = setup();
+    await bridge.addReaction(ALLOWED, MESSAGE, '👍', threadId);
+    await bridge.updateText(ALLOWED, MESSAGE, 'x', threadId);
+    await bridge.attachmentInfo({ chatId: ALLOWED, messageId: MESSAGE, attachmentId: ATTACHMENT, threadId });
+    expect(touched).toEqual([
+      { channel: ALLOWED, op: 'react' },
+      { channel: ALLOWED, op: 'edit' },
+      { channel: ALLOWED, op: 'fetch' },
+    ]);
+  });
+});
+
 describe('embedText', () => {
   it('embed の見出し・URL・本文・項目・注記を文字にする。無ければ undefined', () => {
     const message = {

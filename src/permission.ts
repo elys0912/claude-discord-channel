@@ -214,7 +214,9 @@ export function buildPermissionCard(
   req: PermissionRequest,
   previewLimit: number = DEFAULT_PREVIEW_LIMIT,
   /** 「このセッション中は全部許可」ボタンを付けるか */
-  sessionButton = false
+  sessionButton = false,
+  /** 「今後も許可」ボタンを付けるか（許可リストに足せるルールを作れるリクエストだけ） */
+  alwaysButton = false
 ): { card: Card; truncated: boolean } {
   const toolName = truncatePlain(orPlaceholder(req.tool_name, '(不明なツール)'), FIELD_LIMIT);
   const description = truncatePlain(orPlaceholder(req.description, '(説明なし)'), FIELD_LIMIT);
@@ -224,7 +226,7 @@ export function buildPermissionCard(
   const id = req.request_id;
   const buttons: CardButton[] = [
     { label: 'Allow', id: customId(ACTION.ALLOW, id), style: 'success' },
-    { label: '♾ 今後も許可', id: customId(ACTION.ALLOW_ALWAYS, id) },
+    ...(alwaysButton ? [{ label: '♾ 今後も許可', id: customId(ACTION.ALLOW_ALWAYS, id) }] : []),
     ...(sessionButton ? [{ label: '🔓 このセッション中は全部許可', id: customId(ACTION.ALLOW_SESSION, id) }] : []),
     { label: 'Deny', id: customId(ACTION.DENY, id), style: 'danger' },
     // 省略した部分があるときだけ、全文を出すボタンを付ける

@@ -44,7 +44,8 @@ Discord のセッションは `--strict-mcp-config` なので、この登録は�
 
 ### [config/channel-settings.json](../config/channel-settings.json)
 
-- **allow**: プロジェクトの中の読み取り（`Read(./**)`）、`Glob` / `Grep`、このサーバーの `reply` / `react` / `edit_message` / `send_file` / `progress`。
+- **allow**: プロジェクトの中の読み取り（`Read(./**)`）、このサーバーの `reply` / `react` / `edit_message` / `send_file` / `progress`。
+  - `Glob` / `Grep` はツール全体を allow に入れていない。`path` でプロジェクトの外を指せるため。実機（Claude Code 2.1.295 の `-p`、2026-10-13）では、`path` 無しと作業フォルダーの中の Glob / Grep は確認なしで通り、外を指したときは確認が出た（`path` 無しは作業フォルダーの読み取りとして扱われ、`Read(./**)` が無くても通った）。
   - `download_file` は入れていない。手元のフォルダーに書き込むので、毎回確認する。
   - `send_file` は入れてある。送ってよいかはブリッジ自身が判定する（[ファイルの送信](usage.md#ファイルの送信send_file)）。
   - git コマンドは `git status` も allow に入れていない。`git diff --no-index` などで、プロジェクトの外のファイルを読めるため。
@@ -73,6 +74,7 @@ deny は常に allow より優先される（評価順は deny → ask → allow
 - 送信者は、Discord のユーザー ID（`allowFrom`）とサーバー ID（`guildId`）で判定する。表示名やユーザー名では判定しない。
   - サーバーのメッセージは、`guildId` のサーバーの、`channels` に書いたチャンネル（とその中のスレッド）のものだけを扱う。
   - DM は、サーバーに属さない1対1の DM だけを扱う。
+  - Claude がツール（`reply` / `react` / `edit_message` / `download_file` など）に渡す `thread_id` は、`chat_id` の会話（許可したチャンネル）を親に持つスレッドだと確かめられたときだけ使う。確かめられなければ `chat_id` の会話で扱う。
   - ボタンとメニューの操作では、押した人が `allowFrom` にいること、押された場所が許可ユーザーとの DM か `channels` のチャンネルであること、押されたのがこのボット自身のメッセージであることを確かめる。
 - トークンは状態ディレクトリの `.env` にだけ置く。環境変数からは読まず、MCP の設定ファイルにも書かない。
 - ログに出るトークン（Discord のボットトークンの形をした文字列、webhook の URL の秘密の部分、`Bot ...` / `Bearer ...` の認証ヘッダー）は伏せ字にする。
@@ -94,8 +96,9 @@ deny は常に allow より優先される（評価順は deny → ask → allow
 
 - 許可ユーザーの Discord アカウントが乗っ取られると、手元の Claude をそのまま操作される。Discord アカウントの多要素認証を有効にしておく。
 - 確認で許可した操作は、その内容どおりに実行される。確認の内容はよく読む。
-- 「今後も許可」で足したルールは、以後そのプレフィックスのコマンドを確認なしで実行させる（例: `Bash(git status:*)` は、`git status` に続く引数を問わない）。
-  危険なコマンドは除外しているが、要らなくなったら `!rules` から消す。
+- 「今後も許可」で足したルールは、以後その操作を確認なしで実行させる。シェルのルールは引数なしの完全一致だけだが、`git status` も `core.fsmonitor` などのリポジトリの設定にあるプログラムを動かす（その設定を書き換えられていることが前提）。
+  要らなくなったら `!rules` から消す。
+- 「今後も許可」の MCP のツールは、名前だけで読み取り専用と判断する。名前と中身が違うサーバー（`get_` で外部に送るものなど）は見分けられない。
 - `extra-mcp.json` に登録した MCP サーバーのツールは、確認なしで実行される。
 - `ciWebhooks` に書いた webhook の URL が漏れると、誰でも CI の通知のふりをして Claude に文を渡せる。中身はデータとして扱うよう指示してあるが、URL は GitHub の Secrets にだけ置き、漏れたら webhook を消して作り直す。
 - `UPLOAD_DIRS` の中のファイルは、確認なしで Discord に送られる。私物の混ざるフォルダー（Downloads や Documents 全体など）は指定せず、送る用のフォルダーを作る。
@@ -107,6 +110,35 @@ deny は常に allow より優先される（評価順は deny → ask → allow
 - 会話の内容（コードやログを含む）は、Discord 側に保存される。
 - プロジェクト側の `.claude/settings*.json` の allow は、有効なまま。
 - `.env` のトークンは平文で保存される。
+
+### 「今後も許可」で作れるルール
+
+「♾ 今後も許可」で作るルールは、**許可リスト方式**で決める。次の一覧に当てはまるものだけを作り、それ以外の操作の確認には ♾ のボタンを出さない（その場の 1 回だけ許可する）。
+危険なものを一覧で除く方式（除外一覧）は、拡張子付きの名前（`npm.cmd`）や一覧の漏れ（`find -exec` など）で素通りしたのでやめた。
+一覧はコードの 1 か所（`src/allow-rules.ts` の `SHELL_RULE_ALLOWLIST` と `READ_ONLY_MCP_VERBS`）にまとめてある。変えるときはこの表も合わせる。
+
+| ツール | 作るルール | 条件 |
+|---|---|---|
+| Bash / PowerShell | `Tool(<コマンド>)`（`:*` を付けない完全一致） | 引数を付けずに `git status` / `pwd` / `Get-Location` / `ls` / `dir` を呼んだとき |
+| Read / Grep / Glob | `Read(<フォルダー>/**)` | 対象のフォルダー以下（浅すぎる・ホームとその親・相対パス・特殊文字を含むものは作らない） |
+| Edit / Write / MultiEdit / NotebookEdit | `Edit(<フォルダー>/**)` | 同上 |
+| WebFetch | `WebFetch(domain:<ホスト>)` | URL のホストに絞る。ホストが英小文字・数字・`.`・`-` だけのとき（`*.example.com` や IPv6 の `[::1]` からは作らない）。ツール全体の `WebFetch` は作らない |
+| MCP の個別ツール | `mcp__<サーバー>__<ツール>` | ツール名（頭にサーバー名が付いていれば除く）を語に分け、最初の語が `get` / `list` / `read` / `search` / `find` / `describe` / `view` / `show` で、`create` / `delete` / `send` / `download` / `replace` / `or` / `and` などの書き込みの語を含まないもの |
+
+- シェルのルールは、引数を取らない呼び出しの完全一致だけにする。`Bash(git status)` は `git status` そのものにだけ効き、`git status --short` には効かない。
+  引数付きの呼び出し（`ls C:\x` など）の確認には ♾ を出さない。引数を問わない形（`:*`）にすると、一覧のコマンドでも引数で読み書きできるため。
+  - `git log` は `--output=<ファイル>` で任意のファイルを書き、`-p` / `--all` で過去に commit されたファイル（作業ツリーでは deny の `.env` など）の中身を出す。`--ext-diff` / `--textconv` で設定済みの外部プログラムも動かす。
+  - `git branch` は `-D` / `-m` / `-f` などで ref を消す・動かし、名前だけの引数でブランチを作り、`--edit-description` でエディタを起動する。
+  - `Get-ChildItem` / `ls` / `dir` は、PowerShell では `Env:` などのドライブ（環境変数の中身）や UNC（外部の共有への接続）を引数に取れる。
+  - このため `git log` / `git branch` / `Get-ChildItem` は一覧から外し、`ls` / `dir` は引数なしだけにした。
+  - `cat` / `type` / `Get-Content` / `git diff` / `git show` などの読み取りは、プロジェクトの外や deny のファイル（`.env` など）を読めるので置かない。
+    Claude Code の `Read` の deny は、シェルの子プロセスには効かない前提で扱う。
+- 入力の綴りが、大文字小文字を除いて一覧と同じときだけ作り、ルールには一覧の綴りを使う（`GIT Status` からは `Bash(git status)`）。
+  拡張子や版番号の付いた名前（`git.exe` / `ls.cmd` / `dir2`）、引用符やパスの付いた名前からは作らない。一覧に無い別のプログラムにルールができないようにするため。
+- 複合コマンド（`;` / `&&` / `||` / `|` / `&` / 改行 / `$(` / バッククォート）とリダイレクト（`<` / `>`）を含むものからは作らない。区切りは「全部許可」の ask との照合と同じ定義を使う。
+- 作ったルールは、deny と照合してから追加する（[使い方の詳細](usage.md#許可リストへの追加-今後も許可)）。
+- 前の方式で `allow-extra.json` に入ったルール（`Bash(git log:*)`・`PowerShell(npm.cmd:*)`・ツール全体の `WebFetch` など）は、起動のたびに今の方式で作れる形かを確かめ、作れないものは allow に入れない。
+  `allow-extra.json` は書き換えず、起動の通知（Discord）とターミナルの警告で一覧を知らせる。要らなければ `!rules` から消す。
 
 ### トークンが漏れたとき
 

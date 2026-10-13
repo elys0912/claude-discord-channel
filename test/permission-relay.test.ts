@@ -71,6 +71,18 @@ describe('PermissionRelay', () => {
     expect(relay.lastThread).toEqual({ channel: 'C1', threadTs: '77' });
   });
 
+  it.each([
+    ['git status', true],
+    ['cat README.md', false],
+    ['npm.cmd test', false],
+  ])('「今後も許可」は、許可リストからルールを作れるときだけ出す（%s → %s）', async (command, shown) => {
+    const { relay, replies } = setup();
+    relay.rememberThread('C1', '77');
+    await relay.request({ ...REQ, tool_name: 'Bash', input_preview: JSON.stringify({ command }) });
+    const labels = (replies[0]?.card.buttons ?? []).flat().map((b) => b.label);
+    expect(labels.some((l) => l.includes('今後も許可'))).toBe(shown);
+  });
+
   it('スレッドに返信した request は、回答後にその 1 通だけを書き換える', async () => {
     const { relay, updates } = setup();
     relay.rememberThread('C1', '77');
