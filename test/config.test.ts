@@ -246,3 +246,15 @@ describe('loadAccess', () => {
     expect(() => loadAccess(dir)).toThrow(/JSON 構文が不正/);
   });
 });
+
+describe('config/channel-settings.json', () => {
+  const settings = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '..', 'config', 'channel-settings.json'), 'utf8')) as {
+    permissions: { allow: string[] };
+  };
+
+  it('Glob / Grep をパス無指定で allow に置かない（読み取りは Read(./**) の範囲に任せる）', () => {
+    expect(settings.permissions.allow).not.toContain('Glob');
+    expect(settings.permissions.allow).not.toContain('Grep');
+    expect(settings.permissions.allow).toContain('Read(./**)');
+  });
+});

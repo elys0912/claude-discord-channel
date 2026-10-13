@@ -7,8 +7,6 @@
     "disableBypassPermissionsMode": "disable",
     "allow": [
       "Read(./**)",
-      "Glob",
-      "Grep",
       "mcp__discordbridge__reply",
       "mcp__discordbridge__react",
       "mcp__discordbridge__edit_message",
