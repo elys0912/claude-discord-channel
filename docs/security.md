@@ -60,6 +60,7 @@ Discord のセッションは `--strict-mcp-config` なので、この登録は�
 - **`disableBypassPermissionsMode`**: `bypassPermissions` モードへの切り替えを禁止する。
 - **`disableClaudeAiConnectors`**: claude.ai 側のコネクターを読み込まない。
 - **`language`**: `japanese`
+- **`promptSuggestionEnabled`**: `false`。応答のあとに入力欄へ薄く出る次の入力の候補を出さない。画面は文字でしか読めず候補と打ちかけの文字を見分けられないので、出ていると `!clear`・`!compact`・`!restart` が「入力待ちでない」と判断して止まる。`-SettingsFile` で別の設定ファイルを使うときも入れておく
 
 deny は常に allow より優先される（評価順は deny → ask → allow）。
 
