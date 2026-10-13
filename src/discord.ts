@@ -50,6 +50,8 @@ const THREAD_NAME_MAX = 40;
 /** 覚えておくメッセージの場所・ボットが関わったスレッドの数（古いものから忘れる） */
 const LOCATION_CAPACITY = 2000;
 const ACTIVE_THREAD_CAPACITY = 500;
+/** スレッドを作れなかった返信先の数（古いものから忘れる） */
+const THREADLESS_TARGET_CAPACITY = 500;
 /** 添付を取りに行ってよいホスト */
 const CDN_HOSTS = new Set(['cdn.discordapp.com', 'media.discordapp.net']);
 
@@ -262,6 +264,11 @@ export class DiscordBridge {
   private readonly locations = new BoundedMap<string>(LOCATION_CAPACITY);
   /** ボットが関わったスレッド（話しかけられた・投稿した）。古いものから忘れる */
   private readonly activeThreads = new BoundedMap<true>(ACTIVE_THREAD_CAPACITY);
+  /**
+   * スレッドを作れなかった返信先のメッセージ（権限不足など）。「入力中…」の出し直しなどで同じ返信先に何度も送るので、
+   * 2 回目からは作ろうとせず、元のメッセージへの返信にする（失敗する API 呼び出しと警告を繰り返さない）。動いている間だけ覚える
+   */
+  private readonly threadlessTargets = new BoundedMap<true>(THREADLESS_TARGET_CAPACITY);
 
   private botUserId: string | undefined;
   private handlers: DiscordBridgeEvents | undefined;
@@ -612,6 +619,7 @@ export class DiscordBridge {
   private async resolveTarget(conversation: string, threadTs: string | undefined): Promise<{ channel: SendableChannels; replyTo?: string }> {
     if (threadTs === undefined) return { channel: await this.sendable(conversation) };
     if (this.dmChannelIds().has(conversation)) return { channel: await this.sendable(conversation), replyTo: threadTs };
+    if (this.threadlessTargets.has(threadTs)) return { channel: await this.sendable(conversation), replyTo: threadTs };
 
     // 既にあるスレッドならそこに送る。フォーラムの投稿もスレッドなので、親（フォーラム）に直接は送れなくても届く。
     // スレッドは許可した会話（親）の中にあるものだけ使う
@@ -630,6 +638,7 @@ export class DiscordBridge {
       return { channel: thread };
     } catch (e) {
       this.logger.warn(`スレッドを作れなかったので、元のメッセージへの返信にする thread=${threadTs}`, errMessage(e));
+      this.threadlessTargets.set(threadTs, true);
       return { channel: base, replyTo: threadTs };
     }
   }

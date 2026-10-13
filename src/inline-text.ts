@@ -21,6 +21,12 @@ export const DEFAULT_INLINE_LIMITS: InlineLimits = {
   maxTotalBytes: 200 * 1024,
 };
 
+/**
+ * 1 つの添付の取得（本文の読み込みまで）を待つ上限。受信の処理は 1 本の列なので、CDN が止まると
+ * その間の実行許可の回答や !stop まで待たされる。小さなテキストだけを取るので、数秒で足りる
+ */
+export const INLINE_FETCH_TIMEOUT_MS = 10_000;
+
 const TEXT_EXTENSION_RE = /\.(txt|log|md|csv|tsv|json|jsonl|ya?ml|diff|patch|xml|ini|toml)$/i;
 
 export type InlineBridge = Pick<DiscordBridge, 'attachmentInfo' | 'fetchFile'>;
@@ -50,6 +56,8 @@ export interface InlineDeps {
   bridge: InlineBridge;
   logger: Logger;
   limits?: InlineLimits | undefined;
+  /** 1 つの添付の取得を待つ上限（テスト用。省略時は INLINE_FETCH_TIMEOUT_MS） */
+  fetchTimeoutMs?: number | undefined;
 }
 
 export interface InlineResult {
@@ -75,7 +83,7 @@ export async function inlineTextAttachments(
   for (const f of pickInline(files, limits)) {
     try {
       const info = await deps.bridge.attachmentInfo({ ...at, attachmentId: f.id ?? '' });
-      const res = await deps.bridge.fetchFile(info);
+      const res = await deps.bridge.fetchFile(info, AbortSignal.timeout(deps.fetchTimeoutMs ?? INLINE_FETCH_TIMEOUT_MS));
       const buf = await res.arrayBuffer();
       if (buf.byteLength > limits.maxFileBytes) throw new Error(`大きすぎる（${buf.byteLength} バイト）`);
       // 壊れた文字は置き換え、先頭の BOM は取る（TextDecoder の既定）

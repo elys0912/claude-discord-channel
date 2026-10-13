@@ -8,7 +8,7 @@ import type { Logger } from './log.js';
 import type { Verdict } from './types.js';
 import { isValidRequestId } from './permission.js';
 import type { PermissionRequest } from './permission.js';
-import { sanitizeMeta } from './format.js';
+import { neutralizeChannelTags, sanitizeMeta } from './format.js';
 import { errMessage } from './errors.js';
 import { clip } from './text.js';
 
@@ -332,7 +332,7 @@ export class ChannelServer {
   async pushMessage(content: string, meta: Record<string, string>): Promise<void> {
     await this.server.notification({
       method: 'notifications/claude/channel',
-      params: { content, meta: sanitizeMeta(meta) },
+      params: { content: neutralizeChannelTags(content), meta: sanitizeMeta(meta) },
     });
   }
 

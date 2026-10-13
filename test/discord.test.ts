@@ -296,6 +296,43 @@ describe('DiscordBridge の送信（長文の分割と途中の失敗）', () =>
   });
 });
 
+describe('DiscordBridge のスレッドを作れない返信先', () => {
+  const CHANNEL = '500000000000000050';
+  const ORIGIN = '800000000000000051';
+
+  it('スレッドを作れなかった返信先は覚えて、2 回目からは作ろうとせず元のメッセージへの返信にする', async () => {
+    const tried: string[] = [];
+    const channel = {
+      id: CHANNEL,
+      type: ChannelType.GuildText,
+      isThread: () => false,
+      isSendable: () => true,
+      sendTyping: async () => undefined,
+      messages: {
+        fetch: async () => {
+          tried.push('fetch');
+          return { thread: null, content: 'hi', startThread: async () => Promise.reject(new Error('Missing Permissions')) };
+        },
+      },
+    };
+    const bridge = new DiscordBridge({
+      token: 'unused',
+      access: { guildId: '100000000000000001', allowFrom: ['200000000000000001'], channels: [CHANNEL] },
+      logger: new Logger({ stderr: false }),
+    });
+    const client = (bridge as unknown as { client: { channels: { fetch: (id: string) => Promise<unknown> } } }).client;
+    client.channels.fetch = async (id: string) => {
+      tried.push(`channels.fetch:${id}`);
+      return id === CHANNEL ? channel : null;
+    };
+
+    await bridge.sendTyping(CHANNEL, ORIGIN);
+    tried.length = 0;
+    await bridge.sendTyping(CHANNEL, ORIGIN);
+    expect(tried).toEqual([`channels.fetch:${CHANNEL}`]);
+  });
+});
+
 describe('DiscordBridge のメッセージの在りか（thread_id の検証）', () => {
   const ALLOWED = '500000000000000010';
   const THREAD = '600000000000000011';
