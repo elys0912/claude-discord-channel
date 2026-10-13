@@ -164,7 +164,15 @@ export class FileSender {
     timer.unref?.();
     const entry: Pending = { args, files, timer };
     this.pending.set(id, entry);
-    const res = await this.opts.bridge.postCard(args.chat_id, buildConfirmCard(id, files), args.thread_id);
+    let res: Awaited<ReturnType<FileSendBridge['postCard']>>;
+    try {
+      res = await this.opts.bridge.postCard(args.chat_id, buildConfirmCard(id, files), args.thread_id);
+    } catch (e) {
+      // カードを出せなかった確認は残さない。残すと期限切れで、出していない確認の結果を Claude に知らせる
+      clearTimeout(timer);
+      this.pending.delete(id);
+      throw e;
+    }
     entry.message = { channel: args.chat_id, ts: res.ts };
     this.opts.logger.info(`send_file を確認待ちにした id=${id} files=${files.length}`);
     return `pending: 送ってよい場所の外のファイルがあるので、Discord で確認している（id=${id}）。結果は kind="file_sent" のメッセージで届く。続けて同じファイルを送り直さないこと`;

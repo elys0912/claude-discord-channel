@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { ChannelType } from 'discord.js';
-import { DiscordBridge, embedText, normalizeBotRoleMentions } from '../src/discord.js';
+import { ChannelType, Collection, MessageType } from 'discord.js';
+import type { Message } from 'discord.js';
+import { DiscordBridge, TEXT_CHUNK_MAX, embedText, normalizeBotRoleMentions, threadName, toInbound } from '../src/discord.js';
 import { Logger } from '../src/log.js';
 
 // 実在しない、形だけを合わせた ID（Discord の snowflake と同じ 19 桁）
@@ -19,6 +20,69 @@ describe('normalizeBotRoleMentions', () => {
 
   it('ボットのロールが無ければそのまま', () => {
     expect(normalizeBotRoleMentions(`<@&${ROLE}> hi`, [], BOT)).toBe(`<@&${ROLE}> hi`);
+  });
+});
+
+describe('toInbound', () => {
+  const CHANNEL = '500000000000000040';
+  const PARENT = '500000000000000041';
+  const AUTHOR = '200000000000000001';
+
+  /** toInbound が読むところだけを持つ Message */
+  function message(over: { content?: string; type?: MessageType; webhookId?: string | null; channelType?: ChannelType; roles?: [string, string][] } = {}): Message {
+    const roles = new Collection((over.roles ?? []).map(([id, botId]) => [id, { id, tags: { botId } }]));
+    return {
+      id: '800000000000000001',
+      guildId: '100000000000000001',
+      channelId: CHANNEL,
+      channel: { type: over.channelType ?? ChannelType.GuildText, parentId: PARENT },
+      author: { id: AUTHOR, bot: false },
+      webhookId: over.webhookId ?? null,
+      type: over.type ?? MessageType.Default,
+      content: over.content ?? 'hi',
+      embeds: [],
+      mentions: { roles, has: () => false, repliedUser: null },
+      createdAt: new Date('2026-10-12T00:00:00.000Z'),
+      attachments: new Collection(),
+    } as unknown as Message;
+  }
+
+  it('webhook の発言はボットの発言として扱う', () => {
+    const inbound = toInbound(message({ webhookId: '900000000000000001' }), BOT);
+    expect(inbound).toMatchObject({ authorIsBot: true, webhookId: '900000000000000001' });
+  });
+
+  it.each([
+    [MessageType.Default, true],
+    [MessageType.Reply, true],
+    [MessageType.ChannelPinnedMessage, false],
+    [MessageType.ThreadCreated, false],
+  ])('メッセージの種類 %s は、普通の発言か %s', (type, expected) => {
+    expect(toInbound(message({ type }), BOT).isUserMessage).toBe(expected);
+  });
+
+  it('ボットのロールへのメンションは、ボットへのメンションとして扱う（ほかのボットのロールは扱わない）', () => {
+    const OTHER_ROLE = '1400000000000000003';
+    const roles: [string, string][] = [[ROLE, BOT], [OTHER_ROLE, '1400000000000000009']];
+    const inbound = toInbound(message({ content: `<@&${ROLE}> <@&${OTHER_ROLE}> hi`, roles }), BOT);
+    expect(inbound).toMatchObject({ mentionsBot: true, content: `<@${BOT}> <@&${OTHER_ROLE}> hi` });
+  });
+
+  it('スレッドの発言だけ親のチャンネルを持つ', () => {
+    expect(toInbound(message({ channelType: ChannelType.PublicThread }), BOT)).toMatchObject({ kind: 'thread', parentId: PARENT });
+    expect(toInbound(message(), BOT)).toMatchObject({ kind: 'channel', parentId: undefined });
+  });
+});
+
+describe('threadName', () => {
+  it('40 字目が絵文字の前半でも、サロゲートペアの途中で切らない', () => {
+    const name = threadName('a'.repeat(39) + '😀' + 'b');
+    expect(name).toBe('a'.repeat(39));
+  });
+
+  it('メンションを除いて 1 行にし、空なら Claude', () => {
+    expect(threadName(`<@${BOT}>  調べて\nほしい`)).toBe('調べて ほしい');
+    expect(threadName(`<@${BOT}>`)).toBe('Claude');
   });
 });
 
@@ -99,6 +163,90 @@ describe('DiscordBridge の送り先（フォーラムとスレッド）', () =>
     const { bridge, sent } = setup();
     await expect(bridge.postText(FORUM, 'x', OTHER_POST)).rejects.toThrow(/送信できないチャンネル/);
     expect(sent).toEqual([]);
+  });
+});
+
+describe('DiscordBridge の送信（長文の分割と途中の失敗）', () => {
+  const CHANNEL = '500000000000000030';
+
+  const USER = '200000000000000001';
+
+  type SendOptions = { content?: string | undefined; files?: unknown[] | undefined; reply?: unknown };
+
+  /**
+   * 送ったメッセージを sent に残すチャンネル 1 つの DiscordBridge。failFrom 通目以降の送信は失敗する。
+   * dm なら、init() で許可ユーザーの DM を開いたときと同じ状態にする
+   */
+  function setup(opts: { failFrom?: number; dm?: boolean; longReplyChars?: number } = {}) {
+    const failFrom = opts.failFrom ?? Infinity;
+    const sent: SendOptions[] = [];
+    const channel = {
+      id: CHANNEL,
+      type: opts.dm ? ChannelType.DM : ChannelType.GuildText,
+      isThread: () => false,
+      isSendable: () => true,
+      send: async (options: SendOptions) => {
+        if (sent.length + 1 >= failFrom) throw new Error('Missing Permissions');
+        sent.push({ content: options.content, files: options.files, reply: options.reply });
+        return { id: `m${sent.length}`, channelId: CHANNEL };
+      },
+    };
+    const bridge = new DiscordBridge({
+      token: 'unused',
+      access: { guildId: '100000000000000001', allowFrom: [USER], channels: opts.dm ? [] : [CHANNEL] },
+      logger: new Logger({ stderr: false }),
+      longReplyChars: opts.longReplyChars ?? 0,
+    });
+    const client = (bridge as unknown as { client: { channels: { fetch: (id: string) => Promise<unknown> } } }).client;
+    client.channels.fetch = async (id: string) => (id === CHANNEL ? channel : null);
+    if (opts.dm) {
+      const internals = bridge as unknown as { dmChannels: Map<string, string>; allowedConversations: Set<string> };
+      internals.dmChannels.set(USER, CHANNEL);
+      internals.allowedConversations.add(CHANNEL);
+    }
+    return { bridge, sent };
+  }
+
+  it('reply の長文が途中で失敗したら、送れた件数（sent=N）を付けて投げる', async () => {
+    const { bridge, sent } = setup({ failFrom: 3 });
+    const text = 'a'.repeat(TEXT_CHUNK_MAX * 3);
+    await expect(bridge.postText(CHANNEL, text)).rejects.toThrow(/Missing Permissions \(sent=2\)/);
+    expect(sent).toHaveLength(2);
+  });
+
+  it('reply の 1 通目で失敗したら、sent=N を付けずにそのまま投げる', async () => {
+    const { bridge } = setup({ failFrom: 1 });
+    await expect(bridge.postText(CHANNEL, 'x')).rejects.toThrow(/^Missing Permissions$/);
+  });
+
+  it('一斉メンションを無害化し、とても長い reply は冒頭を本文に、全文を添付にして 1 通で送る', async () => {
+    const { bridge, sent } = setup({ longReplyChars: 100 });
+    const res = await bridge.postText(CHANNEL, '@everyone ' + 'a'.repeat(200));
+    expect(res.asFile).toBe(true);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.content).not.toContain('@everyone');
+    expect(sent[0]?.files).toHaveLength(1);
+  });
+
+  it('DM の長文は、返信の参照を 1 通目にだけ付ける', async () => {
+    const { bridge, sent } = setup({ dm: true });
+    await bridge.postText(CHANNEL, 'a'.repeat(TEXT_CHUNK_MAX * 2), '900000000000000001');
+    expect(sent.map((s) => s.reply)).toEqual([{ messageReference: '900000000000000001', failIfNotExists: false }, undefined]);
+  });
+
+  it('send_file の text が 1 通に収まらなければ、残りを続けて送る（捨てない）', async () => {
+    const { bridge, sent } = setup();
+    const text = 'a'.repeat(TEXT_CHUNK_MAX) + 'b'.repeat(10);
+    await bridge.sendFiles(CHANNEL, [{ path: 'x.txt', name: 'x.txt' }], text);
+    expect(sent.map((s) => s.content)).toEqual(['a'.repeat(TEXT_CHUNK_MAX), 'b'.repeat(10)]);
+    expect(sent[0]?.files).toHaveLength(1);
+    expect(sent[1]?.files).toBeUndefined();
+  });
+
+  it('send_file の続きの送信で失敗したら、送れた件数（sent=N）を付けて投げる', async () => {
+    const { bridge } = setup({ failFrom: 2 });
+    const text = 'a'.repeat(TEXT_CHUNK_MAX) + 'b';
+    await expect(bridge.sendFiles(CHANNEL, [{ path: 'x.txt', name: 'x.txt' }], text)).rejects.toThrow(/Missing Permissions \(sent=1\)/);
   });
 });
 

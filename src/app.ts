@@ -263,12 +263,12 @@ export function createDegradedDeps(logger: Logger): McpDeps {
 
 /** DM か許可チャンネルで届いたメッセージ。保留中の ID への `yes xxxxx` / `no xxxxx` なら許可の回答、それ以外は Claude へ中継する */
 export async function handleMessage(wiring: Wiring, result: GateResult, raw: InboundRef): Promise<void> {
-  const { bridge, server, relay, logger, watchdog } = wiring;
+  const { server, relay, logger, watchdog } = wiring;
 
   // `!screen` などのコマンドは Claude に渡さずにここで処理する（Claude が止まっていても使えるように）
   const command = result.kind === 'deliver' ? parseCommand(result.content) : undefined;
   if (command && raw.channel && raw.threadTs) {
-    if (raw.ts) await bridge.addReaction(raw.channel, raw.ts, REACTION.SEEN);
+    if (raw.ts) await markMessage(wiring, raw.channel, raw.ts, REACTION.SEEN);
     await handleCommand(wiring, command, { channel: raw.channel, threadTs: raw.threadTs }, raw.user ?? '');
     return;
   }
@@ -283,7 +283,7 @@ export async function handleMessage(wiring: Wiring, result: GateResult, raw: Inb
       if (!(await relay.answerByText(result.verdict, raw.user ?? ''))) return;
       if (raw.channel && raw.ts) {
         const reaction = result.verdict.behavior === 'allow' ? REACTION.ALLOW : REACTION.DENY;
-        await bridge.addReaction(raw.channel, raw.ts, reaction);
+        await markMessage(wiring, raw.channel, raw.ts, reaction);
       }
       return;
 
@@ -301,12 +301,21 @@ export async function handleMessage(wiring: Wiring, result: GateResult, raw: Inb
       await server.pushMessage(content, meta);
       if (raw.channel && raw.threadTs) wiring.onDelivered?.({ channel: raw.channel, threadTs: raw.threadTs });
       if (raw.channel && raw.threadTs) watchdog.delivered({ channel: raw.channel, threadTs: raw.threadTs });
-      if (raw.channel && raw.ts) await bridge.addReaction(raw.channel, raw.ts, REACTION.SEEN);
+      if (raw.channel && raw.ts) await markMessage(wiring, raw.channel, raw.ts, REACTION.SEEN);
       return;
     }
 
     default:
       assertNever(result);
+  }
+}
+
+/** 受信したメッセージに目印のリアクションを付ける。付けられなくても受信の処理は続ける（ログに残す） */
+async function markMessage(wiring: Wiring, channel: string, ts: string, emoji: string): Promise<void> {
+  try {
+    await wiring.bridge.addReaction(channel, ts, emoji);
+  } catch (e) {
+    wiring.logger.warn(`リアクションに失敗 emoji=${emoji}`, errMessage(e));
   }
 }
 

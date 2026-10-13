@@ -157,6 +157,15 @@ describe('Discord → MCP', () => {
     expect(h.discord.of('sendTyping')).toEqual([{ method: 'sendTyping', channel: DM1, threadTs: '1001' }]);
   });
 
+  it('👀 を付けられなくても、受信の処理は続ける（Claude への中継・コマンドの返事）', async () => {
+    vi.spyOn(h.discord, 'addReaction').mockRejectedValue(new Error('Missing Permissions'));
+    await h.discord.dm('hello', { id: '1001' });
+    await h.discord.dm('!status', { id: '1002' });
+    await flush();
+    expect(channelMessages(h).map((n) => n.params?.content)).toEqual(['hello']);
+    expect(h.discord.of('postText')[0]).toMatchObject({ channel: DM1, threadTs: '1002' });
+  });
+
   it('許可外ユーザーの DM・ボットの知らせなどの普通でない発言は何も起きない', async () => {
     await h.discord.dm('hello', { user: STRANGER, channel: DM1 });
     await h.discord.dm('pinned', { system: true });
@@ -580,7 +589,9 @@ describe('createToolHandlers 単体', () => {
         postText: async () => {
           throw new Error('boom');
         },
-        addReaction: async () => undefined,
+        addReaction: async () => {
+          throw new Error('Unknown Emoji');
+        },
         updateText: async () => {
           throw 'not-an-error';
         },
@@ -589,8 +600,8 @@ describe('createToolHandlers 単体', () => {
     );
     expect(await handlers.onReply({ chat_id: DM1, text: 'x' })).toBe('error: boom');
     expect(await handlers.onEdit({ chat_id: DM1, message_id: '1', text: 'x' })).toBe('error: not-an-error');
-    expect(await handlers.onReact({ chat_id: DM1, message_id: '1', emoji: ':+1:' })).toBe('reacted');
-    expect(errorSpy).toHaveBeenCalledTimes(2);
+    expect(await handlers.onReact({ chat_id: DM1, message_id: '1', emoji: ':ok:' })).toBe('error: Unknown Emoji');
+    expect(errorSpy).toHaveBeenCalledTimes(3);
     expect(handlers.onDownload).toBeUndefined();
     expect(handlers.onSendFile).toBeUndefined();
   });

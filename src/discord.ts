@@ -224,10 +224,13 @@ export function toInbound(message: Message, botUserId: string | undefined): Inbo
   };
 }
 
-/** スレッドの名前（本文の先頭。空なら Claude） */
-function threadName(content: string): string {
+/** スレッドの名前（本文の先頭。空なら Claude）。THREAD_NAME_MAX で切り、サロゲートペアの途中では切らない */
+export function threadName(content: string): string {
   const oneLine = content.replace(/<@!?\d+>/g, '').replace(/\s+/g, ' ').trim();
-  return oneLine === '' ? 'Claude' : oneLine.slice(0, THREAD_NAME_MAX);
+  if (oneLine === '') return 'Claude';
+
+  const head = oneLine.slice(0, THREAD_NAME_MAX);
+  return /[\uD800-\uDBFF]$/.test(head) ? head.slice(0, -1) : head;
 }
 
 export class DiscordBridge {
@@ -693,15 +696,29 @@ export class DiscordBridge {
     await target.channel.sendTyping();
   }
 
-  /** ファイルを添付して送る（send_file 用。送ってよいかの判定は send-file.ts が済ませている） */
+  /**
+   * ファイルを添付して送る（send_file 用。送ってよいかの判定は send-file.ts が済ませている）。
+   * text が TEXT_CHUNK_MAX を超えるときは、1 通目に先頭を、残りを続けて送る。
+   * 続きの送信で失敗したら、例外のメッセージに `sent=N`（添付の 1 通を含む送れた件数）を付けて投げる
+   */
   async sendFiles(channel: string, files: { path: string; name: string }[], text?: string, threadTs?: string): Promise<{ ts: string }> {
     this.assertAllowed(channel);
     const target = await this.resolveTarget(channel, threadTs);
-    const content = text === undefined ? undefined : chunkText(neutralizeBroadcasts(text), TEXT_CHUNK_MAX)[0];
+    const [first, ...rest] = text === undefined ? [] : chunkText(neutralizeBroadcasts(text), TEXT_CHUNK_MAX);
     const sent = await this.send(target, {
-      ...(content ? { content } : {}),
+      ...(first ? { content: first } : {}),
       files: files.map((f) => ({ attachment: f.path, name: f.name })),
     });
+
+    let count = 1;
+    try {
+      for (const piece of rest) {
+        await this.send({ channel: target.channel }, { content: piece });
+        count++;
+      }
+    } catch (e) {
+      throw new Error(`${errMessage(e)} (sent=${count})`, { cause: e });
+    }
     return { ts: sent.id };
   }
 
@@ -722,15 +739,11 @@ export class DiscordBridge {
     await channel.messages.edit(messageId, { ...options, allowedMentions: NO_MENTIONS });
   }
 
-  /** リアクション付与。失敗しても投げない（ログに残す） */
+  /** リアクション付与。失敗は投げる（react ツールが error を返せるように。受信時の 👀 は app.ts の markMessage が握る） */
   async addReaction(channel: string, ts: string, emoji: string, threadTs?: string): Promise<void> {
     this.assertAllowed(channel);
-    try {
-      const target = await this.sendable(await this.locate(channel, ts, threadTs));
-      await target.messages.react(ts, emoji);
-    } catch (e) {
-      this.logger.warn(`リアクションに失敗 emoji=${emoji}`, errMessage(e));
-    }
+    const target = await this.sendable(await this.locate(channel, ts, threadTs));
+    await target.messages.react(ts, emoji);
   }
 
   /**
