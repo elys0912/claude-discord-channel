@@ -5,7 +5,7 @@
 import path from 'node:path';
 import os from 'node:os';
 import type { PermissionRequest } from './permission.js';
-import { denyDirOf, isSameOrAncestor, toRulePath } from './allow-rules.js';
+import { denyDirOf, isSameOrAncestor, normalizeCommandName, toRulePath } from './allow-rules.js';
 import type { DenyContext } from './allow-rules.js';
 
 const SHELL_TOOLS = new Set(['bash', 'powershell']);
@@ -14,6 +14,18 @@ const PATH_RULE_TARGETS: Record<string, readonly string[]> = {
   read: ['read', 'grep', 'glob'],
   edit: ['edit', 'write', 'multiedit', 'notebookedit'],
 };
+/** シェルのコマンドを部分に分ける区切り（`;` `&&` `||` `|` `&` 改行 `$(` バッククォート）。Claude Code は部分ごとに ask と照合する */
+const COMMAND_SEPARATOR_RE = /&&|\|\||[;|&\n\r`]|\$\(/;
+/** 部分の先頭の環境変数の代入（`FOO=1 git push`） */
+const ENV_ASSIGNMENT_RE = /^[A-Za-z_]\w*=/;
+/** 照合できる先頭の語の形（引用符・パス・括弧などを含むものは解釈しない） */
+const PLAIN_COMMAND_RE = /^[A-Za-z][\w.-]*$/;
+/** 後ろの語を別のコマンドとして実行するもの。先頭がこれなら、何を実行するかを解釈しない（当たりにする） */
+const WRAPPER_COMMANDS = new Set([
+  'env', 'sudo', 'runas', 'timeout', 'time', 'nohup', 'nice', 'xargs', 'command', 'builtin', 'exec', 'eval', 'source',
+  'sh', 'bash', 'zsh', 'cmd', 'powershell', 'pwsh', 'wsl', 'start', 'start-process', 'saps', 'invoke-expression', 'iex',
+  'invoke-command', 'icm', 'start-job', 'call',
+]);
 /** ファイル名だけのパターンで、正規表現に直す前にエスケープする文字（* と ? はワイルドカードとして別に扱う） */
 const REGEX_SPECIAL_RE = /[.+^$()|]/g;
 
@@ -67,17 +79,62 @@ function defaultContext(): DenyContext {
 }
 
 /**
+ * シェルのコマンドの 1 部分が、ask のプレフィックス（`:*` と末尾の `*` を外したもの）に当たるか。
+ * 解釈できない形（先頭の環境変数の代入・ラッパー・引用符やパスの付いた先頭の語・ワイルドカードを含むプレフィックス）は当たりにする。
+ * 先頭の語はどちらも normalizeCommandName で正規化してから比べる（`git.exe push` も `git push` に当たる）
+ */
+function shellPartMatches(part: string, prefix: string): boolean {
+  if (prefix.includes('*')) return true;
+  const words = part.split(/\s+/);
+  const first = words[0] ?? '';
+  if (ENV_ASSIGNMENT_RE.test(first) || !PLAIN_COMMAND_RE.test(first)) return true;
+  const name = normalizeCommandName(first);
+  if (WRAPPER_COMMANDS.has(name)) return true;
+  const [prefixFirst = '', ...prefixRest] = prefix.split(/\s+/);
+  const normalizedPrefix = [normalizeCommandName(prefixFirst), ...prefixRest].join(' ').toLowerCase();
+  return [name, ...words.slice(1)].join(' ').toLowerCase().startsWith(normalizedPrefix);
+}
+
+/** シェルのコマンドが ask のプレフィックスに当たるか。区切りで分けた部分のどれかが当たれば当たり */
+function shellCommandMatches(command: string, prefix: string): boolean {
+  return command
+    .split(COMMAND_SEPARATOR_RE)
+    .map((part) => part.trim())
+    .filter((part) => part !== '')
+    .some((part) => shellPartMatches(part, prefix));
+}
+
+/**
+ * MCP のルール（`mcp__<サーバー>` / `mcp__<サーバー>__*` / `mcp__<サーバー>__<ツール>`）がツール（小文字）に当たるか。
+ * MCP のルールでなければ undefined
+ */
+function mcpRuleMatches(rule: string, tool: string): boolean | undefined {
+  const name = rule.trim().toLowerCase();
+  if (!name.startsWith('mcp__')) return undefined;
+  const scope = name.endsWith('__*') ? name.slice(0, -'__*'.length) : name;
+  return tool === scope || tool.startsWith(`${scope}__`);
+}
+
+/**
  * リクエストが、ask のルールのどれかに当たるなら、そのルールを返す（当たらなければ undefined）。大文字小文字は区別しない。
  * - ツール全体のルール: そのツールの全リクエストに当たる
- * - シェル（Bash / PowerShell）の中身付き: コマンドがそのプレフィックスで始まれば当たり。コマンドが読めなければ当たり
+ * - MCP のルール: `mcp__<サーバー>` と `mcp__<サーバー>__*` は、そのサーバーの全ツールに当たる
+ * - シェル（Bash / PowerShell）の中身付き: コマンドを区切りで分けた部分のどれかが当たれば当たり（shellPartMatches）。
+ *   コマンドが読めなければ当たり
  * - Read / Edit の中身付き: pathRuleMatches（パスが読めない・複雑なパターンなら当たり）
  * - それ以外のツールの中身付き（WebFetch(domain:...) など）: 判断できないので当たり
+ * - 形の読めないルール: 判断できないので、どのリクエストにも当たり
  */
 export function matchingRule(req: PermissionRequest, rules: readonly string[], ctx: DenyContext = defaultContext()): string | undefined {
   const tool = req.tool_name.trim().toLowerCase();
   for (const rule of rules) {
+    const mcp = mcpRuleMatches(rule, tool);
+    if (mcp !== undefined) {
+      if (mcp) return rule;
+      continue;
+    }
     const m = /^([A-Za-z][\w-]*)(?:\((.*)\))?$/.exec(rule.trim());
-    if (!m) continue;
+    if (!m) return rule;
     const ruleTool = (m[1] ?? '').toLowerCase();
     const pathTargets = PATH_RULE_TARGETS[ruleTool];
     if (!(pathTargets ?? [ruleTool]).includes(tool)) continue;
@@ -88,10 +145,10 @@ export function matchingRule(req: PermissionRequest, rules: readonly string[], c
       continue;
     }
     if (!SHELL_TOOLS.has(tool)) return rule;
-    const command = inputField(req, 'command')?.trim().toLowerCase();
+    const command = inputField(req, 'command')?.trim();
     if (command === undefined) return rule;
-    const prefix = body.replace(/:\*$|\s*\*$/, '').trim().toLowerCase();
-    if (command.startsWith(prefix)) return rule;
+    const prefix = body.replace(/:\*$|\s*\*$/, '').trim();
+    if (shellCommandMatches(command, prefix)) return rule;
   }
   return undefined;
 }
@@ -125,6 +182,19 @@ export class SessionAllowAll {
     const was = this.state !== undefined;
     this.state = undefined;
     return was;
+  }
+
+  /**
+   * 全部許可のボタンを出してよいか。ask を読めない（設定ファイルが読めない・JSON でない）なら、
+   * 何を自動許可から外すべきか判断できないので false
+   */
+  available(): boolean {
+    try {
+      this.loadRules();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**

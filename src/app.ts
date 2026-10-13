@@ -561,8 +561,10 @@ export interface BridgeAppOptions {
   restartFlagFile?: string | undefined;
   /** `!restart force` で claude.exe を止める手段（テスト用。省略時は taskkill でプロセスツリーごと止める） */
   killParent?: SessionControlOptions['killParent'];
-  /** 実行許可に「このセッション中は全部許可」ボタンを出すか（.env の SESSION_ALLOW_ALL）。除外する ask は denyFiles から読む */
+  /** 実行許可に「このセッション中は全部許可」ボタンを出すか（.env の SESSION_ALLOW_ALL）。除外する ask は denyFiles と managedSettingsFiles から読む */
   sessionAllowAll?: boolean | undefined;
+  /** managed settings（組織の管理設定）のファイルの一覧を返す。全部許可で除外する ask に加える。省略時は読まない（テスト用） */
+  managedSettingsFiles?: (() => string[]) | undefined;
   /** テキストの添付を本文に差し込む手段と上限。省略時は差し込まない */
   inline?: InlineDeps | undefined;
   /** キャッシュのつなぎ止めの設定。省略時はつなぎ止めない（hook の記録が無いと応答の終わりが分からないので、hookInboxFile も要る） */
@@ -637,7 +639,8 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
   });
   const sessionAllow = opts.sessionAllowAll
     ? // deny に当たる操作は Claude Code が確認を出す前に止めるので、照合するのは ask だけ
-      new SessionAllowAll(() => (opts.denyFiles ?? []).flatMap((f) => readAsk(f)))
+      // managed の ask も、--settings より優先して Claude Code が確認を求めるので照合する
+      new SessionAllowAll(() => [...(opts.denyFiles ?? []), ...(opts.managedSettingsFiles?.() ?? [])].flatMap((f) => readAsk(f)))
     : undefined;
   const relay: PermissionRelay = new PermissionRelay(bridge, server, logger, undefined, sessionAllow);
   const startedAt = new Date();

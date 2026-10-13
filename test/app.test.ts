@@ -1185,12 +1185,21 @@ describe('このセッション中は全部許可', () => {
   let hooks: string;
   const cards = () => h.discord.of('postCard');
 
-  async function start(sessionAllowAll: boolean): Promise<void> {
+  /** managed: managed settings のファイルの中身（省略時はファイルを置かない） */
+  async function start(sessionAllowAll: boolean, managed?: string): Promise<void> {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-allowall-'));
     const settings = path.join(dir, 'settings.json');
     fs.writeFileSync(settings, JSON.stringify({ permissions: { ask: ['Bash(git push:*)'], deny: ['Bash(rm:*)', 'Read(.env)', 'Read(~/.ssh/**)'] } }));
+    const managedFile = path.join(dir, 'managed-settings.json');
+    if (managed !== undefined) fs.writeFileSync(managedFile, managed);
     hooks = path.join(dir, 'hooks.jsonl');
-    h = await startHarness(ACCESS, undefined, { denyFiles: [settings], sessionAllowAll, hookInboxFile: hooks, hookPollMs: 20 });
+    h = await startHarness(ACCESS, undefined, {
+      denyFiles: [settings],
+      managedSettingsFiles: () => [managedFile],
+      sessionAllowAll,
+      hookInboxFile: hooks,
+      hookPollMs: 20,
+    });
     // 自動許可の記録を出す返信先を覚えさせる
     await h.discord.dm('作業して', { id: '2000' });
     await flush();
@@ -1251,6 +1260,21 @@ describe('このセッション中は全部許可', () => {
     expect(verdicts(h)).toHaveLength(1);
     // git push は許可リストに無いので「今後も許可」も出さない
     expect(componentIds(cards()[0]?.card)).toEqual(['perm:allow:fghij', 'perm:deny:fghij']);
+  });
+
+  it('managed settings の ask に当たるものも、ボタンで聞く', async () => {
+    await start(true, JSON.stringify({ permissions: { ask: ['Bash(npm publish:*)'] } }));
+    await enableByButton();
+
+    await sendBash(h, 'cd pkg && npm publish', 'fghij');
+    expect(verdicts(h)).toHaveLength(1);
+    expect(componentIds(cards()[0]?.card)).toContain('perm:allow:fghij');
+  });
+
+  it('managed settings が読めない（JSON でない）ときは、全部許可のボタンを出さない', async () => {
+    await start(true, '{ broken');
+    await sendBash(h, 'git status');
+    expect(componentIds(cards()[0]?.card)).not.toContain('perm:session:abcde');
   });
 
   it('!lock で解除すると、またボタンで聞く', async () => {

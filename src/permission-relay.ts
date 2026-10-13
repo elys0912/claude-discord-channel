@@ -107,7 +107,8 @@ export class PermissionRelay {
     this.pending.add(req);
     this.startExpiryTimer(req.request_id);
 
-    const sessionButton = this.sessionAllow !== undefined && this.sessionAllow.current === undefined;
+    // 自動許可から外す ask を読めないときは、全部許可のボタンを出さない
+    const sessionButton = this.sessionAllow !== undefined && this.sessionAllow.current === undefined && this.sessionAllow.available();
     // 許可リストに足せるルールを作れないリクエストには「今後も許可」を出さない（その場の 1 回の許可だけにする）
     const { card } = buildPermissionCard(req, undefined, sessionButton, deriveRule(req).ok);
     if (await this.replyToLastThread(req, card)) return;

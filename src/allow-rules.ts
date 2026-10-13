@@ -354,6 +354,37 @@ export function readAsk(file: string): string[] {
   return stringsOf((readJson(file) as { permissions?: { ask?: unknown } } | undefined)?.permissions?.ask);
 }
 
+/** managed settings（組織の管理設定）の既定の置き場所（Claude Code の仕様。OS ごと） */
+const MANAGED_SETTINGS_DIRS: Partial<Record<NodeJS.Platform, string>> = {
+  win32: 'C:\\Program Files\\ClaudeCode',
+  darwin: '/Library/Application Support/ClaudeCode',
+  linux: '/etc/claude-code',
+};
+const MANAGED_SETTINGS_FILE = 'managed-settings.json';
+/** managed-settings.json に重ねるファイルを置くフォルダー（中の *.json を名前順に読む） */
+const MANAGED_SETTINGS_DROPIN_DIR = 'managed-settings.d';
+
+/**
+ * managed settings のファイルの一覧（managed-settings.json と managed-settings.d の *.json）。
+ * 無いファイル・フォルダーは readAsk / readDeny が空として扱う。managed-settings.d が読めない（ENOENT 以外）ときは投げる。
+ * レジストリやサーバーから配る managed settings は読まない
+ */
+export function managedSettingsFiles(dir: string | undefined = MANAGED_SETTINGS_DIRS[process.platform]): string[] {
+  if (dir === undefined) return [];
+  const dropInDir = path.join(dir, MANAGED_SETTINGS_DROPIN_DIR);
+  let dropIns: string[];
+  try {
+    dropIns = fs
+      .readdirSync(dropInDir)
+      .filter((name) => name.endsWith('.json') && !name.startsWith('.'))
+      .sort();
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw new Error(`${dropInDir} を読めない: ${errMessage(e)}`, { cause: e });
+    dropIns = [];
+  }
+  return [path.join(dir, MANAGED_SETTINGS_FILE), ...dropIns.map((name) => path.join(dropInDir, name))];
+}
+
 /** 追加分のルール（状態ディレクトリの allow-extra.json）。start.ps1 が起動時に channel-settings.json の allow へ足す */
 export class AllowRuleStore {
   private readonly file: string;

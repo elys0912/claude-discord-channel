@@ -6,6 +6,7 @@ import {
   AllowRuleStore,
   denyOverlaps,
   deriveRule,
+  managedSettingsFiles,
   normalizeCommandName,
   parseRuleForCheck,
   proposeRule,
@@ -193,6 +194,23 @@ describe('readDeny / AllowRuleStore', () => {
     expect(readDeny(path.join(dir, 'none.json'))).toEqual([]);
     fs.writeFileSync(file, '{ broken');
     expect(() => readDeny(file)).toThrow('JSON 構文が不正');
+  });
+
+  it('managedSettingsFiles: managed-settings.json と managed-settings.d の *.json を名前順に返す', () => {
+    const dropIn = path.join(dir, 'managed-settings.d');
+    fs.mkdirSync(dropIn);
+    for (const name of ['20-b.json', '10-a.json', '.hidden.json', 'note.txt']) fs.writeFileSync(path.join(dropIn, name), '{}');
+    expect(managedSettingsFiles(dir)).toEqual([
+      path.join(dir, 'managed-settings.json'),
+      path.join(dropIn, '10-a.json'),
+      path.join(dropIn, '20-b.json'),
+    ]);
+  });
+
+  it('managedSettingsFiles: managed-settings.d が無ければ managed-settings.json だけ。読めなければ投げる', () => {
+    expect(managedSettingsFiles(dir)).toEqual([path.join(dir, 'managed-settings.json')]);
+    fs.writeFileSync(path.join(dir, 'managed-settings.d'), 'not a dir');
+    expect(() => managedSettingsFiles(dir)).toThrow('を読めない');
   });
 
   it('壊れた allow-extra.json は一覧では空扱いにし、追加・削除は投げて上書きしない', () => {

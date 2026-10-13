@@ -216,7 +216,12 @@ Discord のセッションは `--strict-mcp-config` で起動する。そのた�
 `.env` に `SESSION_ALLOW_ALL=on` を書いたボットだけ、実行許可のカードに **🔓 このセッション中は全部許可** ボタンが出る。
 押すと今回を許可したうえで、以後の実行許可にはブリッジが自動で allow を返す（カードは出さない）。
 
-- `channel-settings.json`（`-SettingsFile` で渡したもの）と作業フォルダーの `.claude/settings.json` / `settings.local.json` の ask に当たる操作は自動許可から外し、今までどおりカードで確かめる。判断できないものは、安全側に倒して当たると判定する。
+- `channel-settings.json`（`-SettingsFile` で渡したもの）と作業フォルダーの `.claude/settings.json` / `settings.local.json`、managed settings（組織の管理設定。`C:\Program Files\ClaudeCode\managed-settings.json` と `managed-settings.d\*.json`）の ask に当たる操作は自動許可から外し、今までどおりカードで確かめる。判断できないものは、安全側に倒して当たると判定する。
+  - シェルのコマンドは、`;` `&&` `||` `|` `&` 改行 `$(` バッククォートで分けた部分ごとに照合する（`cd repo && git push` も `Bash(git push:*)` に当たる）。先頭の語は小文字にし、`.exe` / `.cmd` などの拡張子と版番号を剥がして比べる。
+  - 先頭が環境変数の代入（`FOO=1 ...`）・ラッパー（`env` / `sudo` / `sh` / `cmd` / `powershell` / `iex` など）・引用符やパスの付いたコマンドの部分と、ワイルドカードを含む ask（`Bash(git * --force)` など）は、解釈できないので当たりにする。
+  - `mcp__<サーバー>` と `mcp__<サーバー>__*` の ask は、そのサーバーの全ツールに当たる。形の読めない ask は、どの操作にも当たりにする。
+  - これらの設定ファイルのどれかが読めない・JSON でないときは、何を外すべきか判断できないので、全部許可のボタンを出さない。
+  - レジストリ（`HKLM\SOFTWARE\Policies\ClaudeCode` など）やサーバーから配られる managed settings は読まない。組織がそれらで ask を配っている PC では、`SESSION_ALLOW_ALL` を使わない。
 - deny に当たる操作は、Claude Code が確認を出す前に止める。だから全部許可の間も実行されない。
 - 自動で許可した操作は、最後に話しかけた場所に「🔓 自動許可: ツール名」と入力の先頭を残す。
 - 解除されるのは、`!lock` を送ったとき、`!clear` などで新しい会話になったとき、ブリッジが終了したとき（再起動・`!restart` を含む）。`/compact` では解除しない。

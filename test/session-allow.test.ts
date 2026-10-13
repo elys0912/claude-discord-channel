@@ -35,7 +35,48 @@ describe('matchingRule', () => {
   });
 
   it('関係ないツールのルールには当たらない', () => {
-    expect(matchingRule(req('Bash', { command: 'ls' }), ['WebFetch', 'Read(.env)', 'not a rule('])).toBeUndefined();
+    expect(matchingRule(req('Bash', { command: 'ls' }), ['WebFetch', 'Read(.env)', 'mcp__a'])).toBeUndefined();
+  });
+
+  it('形の読めないルールは、判断できないので当たりにする', () => {
+    expect(matchingRule(req('Bash', { command: 'ls' }), ['not a rule('])).toBe('not a rule(');
+  });
+
+  it.each([
+    'cd repo && git push origin main',
+    'git status; git push',
+    'git status || git push',
+    'echo x | git push',
+    'git status\ngit push',
+    'echo $(git push)',
+    'echo `git push`',
+    'git status & git push',
+    'git.exe push origin main',
+    'GIT.CMD push',
+  ])('複合コマンドは部分ごとに照合し、先頭の語は正規化する（%s）', (command) => {
+    expect(matchingRule(req('Bash', { command }), ['Bash(git push:*)'])).toBe('Bash(git push:*)');
+  });
+
+  it.each(['FOO=1 ls', 'env ls', 'sudo ls', 'cmd /c ls', 'powershell -Command ls', 'iex "ls"', '"C:\\tools\\x.exe" ls', './x.sh'])(
+    '解釈できない形（%s）は当たりにする',
+    (command) => {
+      expect(matchingRule(req('Bash', { command }), ['Bash(git push:*)'])).toBe('Bash(git push:*)');
+    }
+  );
+
+  it('ワイルドカードを含むプレフィックスは当たりにする', () => {
+    expect(matchingRule(req('Bash', { command: 'ls' }), ['Bash(git * --force)'])).toBe('Bash(git * --force)');
+  });
+
+  it('どの部分もプレフィックスで始まらなければ当たらない', () => {
+    expect(matchingRule(req('Bash', { command: 'cd repo && git status | head' }), ['Bash(git push:*)'])).toBeUndefined();
+  });
+
+  it('サーバー単位の MCP のルール（mcp__<サーバー> / mcp__<サーバー>__*）は、そのサーバーの全ツールに当たる', () => {
+    expect(matchingRule(req('mcp__github__create_issue', {}), ['mcp__github'])).toBe('mcp__github');
+    expect(matchingRule(req('mcp__github__create_issue', {}), ['mcp__github__*'])).toBe('mcp__github__*');
+    expect(matchingRule(req('mcp__githubx__create_issue', {}), ['mcp__github'])).toBeUndefined();
+    expect(matchingRule(req('mcp__github__get_issue', {}), ['mcp__github__get'])).toBeUndefined();
   });
 });
 
@@ -89,11 +130,16 @@ describe('SessionAllowAll', () => {
     expect(s.current).toBeUndefined();
   });
 
-  it('ルールを読めなければ自動許可しない', () => {
+  it('ルールを読めなければ自動許可しない。全部許可のボタンも出せない（available が false）', () => {
     const s = new SessionAllowAll(() => {
       throw new Error('broken json');
     });
+    expect(s.available()).toBe(false);
     s.enable('U1');
     expect(s.check(req('Bash', { command: 'ls' })).allow).toBe(false);
+  });
+
+  it('ルールを読めれば available は true', () => {
+    expect(new SessionAllowAll(() => []).available()).toBe(true);
   });
 });
