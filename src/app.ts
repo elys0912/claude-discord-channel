@@ -127,6 +127,15 @@ export function assertNever(value: never): never {
 /** キャッシュのつなぎ止めで Claude に送る本文（INSTRUCTIONS に、ツールを呼ばず ok とだけ書くよう書いてある） */
 export const KEEPALIVE_TEXT = 'keepalive（キャッシュのつなぎ止め。ツールを呼ばずに ok とだけ書く）';
 
+/** Gateway が回復できずに閉じたとき Claude に送る本文（INSTRUCTIONS に、ターミナルに書いて終えるよう書いてある） */
+export function gatewayLostText(detail: string): string {
+  return [
+    `Discord との接続が回復できない理由で切れ、ブリッジは再接続しない（${detail}）。`,
+    'Discord からのメッセージは届かず、Discord のツールも使えない。',
+    'ボットのトークンが無効になった、または Developer Portal で Intent が OFF になった可能性がある。設定を確かめてから起動し直す。',
+  ].join('\n');
+}
+
 /** `!help` の文面 */
 export const HELP_TEXT = [
   '📖 ブリッジのコマンド（Claude には渡さず、ブリッジが処理する。Claude が止まっていても使える。`!` の代わりに `/` で始めると、補完から選べる）',
@@ -798,6 +807,7 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
       onAction: (parsed, ctx) => handleAction(wiring, parsed, ctx),
       onCommand: (command, ctx) => handleSlashCommand(wiring, command, ctx),
       isKnownRequest: (id) => relay.lookup(id) !== undefined,
+      onGatewayLost: (detail) => server.pushMessage(gatewayLostText(detail), { kind: 'bridge_error' }),
     });
   } catch (e) {
     await stop().catch((err: unknown) => logger.error('起動失敗後の後片付けで例外', err));

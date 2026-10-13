@@ -88,6 +88,11 @@ export interface DiscordBridgeEvents {
   onCommand?: ((command: Command, ctx: ActionContext) => void | Promise<void>) | undefined;
   /** 保留中の permission request か（gate に渡す。省略時は `yes xxxxx` の形なら常に verdict） */
   isKnownRequest?: ((requestId: string) => boolean) | undefined;
+  /**
+   * Gateway が回復できない理由（トークンの無効化・Intent の不許可など）で閉じ、再接続しないとき。
+   * 以後は受信が止まるので、手元のセッションに知らせる。detail は閉じた理由（ログ用）
+   */
+  onGatewayLost?: ((detail: string) => void | Promise<void>) | undefined;
 }
 
 export interface DiscordInitResult {
@@ -348,10 +353,9 @@ export class DiscordBridge {
       this.connected = true;
       this.logger.info('gateway: resumed');
     });
-    this.client.on(Events.ShardDisconnect, () => {
-      this.connected = false;
-      this.logger.warn('gateway: disconnected');
-    });
+    // discord.js 14 の ShardDisconnect は、回復できない close code で閉じて再接続しないときだけ来る
+    this.client.on(Events.ShardDisconnect, (event) => this.gatewayLost(`close code ${event.code}`));
+    this.client.on(Events.Invalidated, () => this.gatewayLost('session invalidated'));
     this.client.on(Events.ShardReconnecting, () => {
       this.connected = false;
       this.logger.info('gateway: reconnecting');
@@ -384,6 +388,15 @@ export class DiscordBridge {
         await this.handleInteraction(interaction);
       });
     });
+  }
+
+  /** 回復できない切断。受信の列を通さずに知らせる（列が詰まっていても届くように） */
+  private gatewayLost(detail: string): void {
+    this.connected = false;
+    this.logger.error(`gateway: 回復できない切断で、再接続しない（${detail}）`);
+    Promise.resolve(this.handlers?.onGatewayLost?.(detail)).catch((e: unknown) =>
+      this.logger.error('回復できない切断の知らせで例外', e)
+    );
   }
 
   /** 受信イベントを 1 本の Promise チェーンに積み、受け取った順に 1 件ずつ処理する */

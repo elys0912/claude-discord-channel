@@ -25,6 +25,7 @@ import { ACCESS, BOT, CH, DM1, DM2, FakeDiscord, STRANGER, USER1, cardText, comp
 import type { ParsedAccess } from '../src/config.js';
 import type { BridgeAppOptions } from '../src/app.js';
 import type { ConsoleKey } from '../src/console.js';
+import type { DiscordBridgeEvents } from '../src/discord.js';
 
 interface Notification {
   method: string;
@@ -155,6 +156,14 @@ describe('Discord → MCP', () => {
     });
     expect(h.discord.of('addReaction')).toEqual([{ method: 'addReaction', channel: DM1, ts: '1001', emoji: REACTION.SEEN }]);
     expect(h.discord.of('sendTyping')).toEqual([{ method: 'sendTyping', channel: DM1, threadTs: '1001' }]);
+  });
+
+  it('Gateway が回復できずに閉じたら、手元のセッションに kind="bridge_error" で知らせる', async () => {
+    const handlers = (h.discord as unknown as { handlers: DiscordBridgeEvents }).handlers;
+    await handlers.onGatewayLost?.('close code 4004');
+    const n = channelMessages(h)[0];
+    expect(n?.params?.meta).toEqual({ kind: 'bridge_error' });
+    expect(n?.params?.content).toContain('close code 4004');
   });
 
   it('👀 を付けられなくても、受信の処理は続ける（Claude への中継・コマンドの返事）', async () => {

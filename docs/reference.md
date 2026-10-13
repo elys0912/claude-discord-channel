@@ -70,7 +70,7 @@
 - 出力先は `logs\bridge.log` と stderr。
 - レベルは info で固定（変える設定は無い）。
 - 5MB を超えると `bridge.log.1` に退避する。残すのは1世代だけで、古い `.1` は上書きする。
-- Gateway の接続の変化は `gateway: ready` / `resumed` / `reconnecting` / `disconnected` として出る。
+- Gateway の接続の変化は `gateway: ready` / `resumed` / `reconnecting` として出る。回復できない理由（トークンの無効化・Intent の不許可など）で閉じたときは `gateway: 回復できない切断で、再接続しない` を error で出し、手元のセッションにも `kind="bridge_error"` で知らせる（Claude がターミナルに書く）。
 
 ## 固定値
 

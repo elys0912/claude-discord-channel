@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ChannelType, Collection, MessageType } from 'discord.js';
+import { ChannelType, Collection, Events, MessageType } from 'discord.js';
 import type { Message } from 'discord.js';
 import { DiscordBridge, TEXT_CHUNK_MAX, embedText, normalizeBotRoleMentions, threadName, toInbound } from '../src/discord.js';
 import { Logger } from '../src/log.js';
@@ -83,6 +83,41 @@ describe('threadName', () => {
   it('メンションを除いて 1 行にし、空なら Claude', () => {
     expect(threadName(`<@${BOT}>  調べて\nほしい`)).toBe('調べて ほしい');
     expect(threadName(`<@${BOT}>`)).toBe('Claude');
+  });
+});
+
+describe('DiscordBridge の回復できない切断', () => {
+  function setup() {
+    const lost: string[] = [];
+    const bridge = new DiscordBridge({
+      token: 'unused',
+      access: { guildId: '100000000000000001', allowFrom: ['200000000000000001'] },
+      logger: new Logger({ stderr: false }),
+    });
+    const internals = bridge as unknown as { bindListeners: () => void; connected: boolean; client: { emit: (event: string, ...args: unknown[]) => boolean } };
+    internals.bindListeners();
+    internals.connected = true;
+    void bridge.start({ onMessage: () => undefined, onAction: () => undefined, onGatewayLost: (detail) => void lost.push(detail) });
+    return { bridge, lost, client: internals.client };
+  }
+
+  it('再接続しない切断（ShardDisconnect）は、つながっていない状態にして close code を知らせる', () => {
+    const { bridge, lost, client } = setup();
+    client.emit(Events.ShardDisconnect, { code: 4004 }, 0);
+    expect(bridge.isConnected).toBe(false);
+    expect(lost).toEqual(['close code 4004']);
+  });
+
+  it('セッションの無効化（Invalidated）も知らせる', () => {
+    const { lost, client } = setup();
+    client.emit(Events.Invalidated);
+    expect(lost).toEqual(['session invalidated']);
+  });
+
+  it('再接続を試みる切断（ShardReconnecting）は知らせない', () => {
+    const { lost, client } = setup();
+    client.emit(Events.ShardReconnecting, 0);
+    expect(lost).toEqual([]);
   });
 });
 
