@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ChannelType, Collection, Events, MessageType } from 'discord.js';
+import { ChannelType, Collection, Events, MessageFlags, MessageType } from 'discord.js';
 import type { Message } from 'discord.js';
 import { DiscordBridge, TEXT_CHUNK_MAX, embedText, normalizeBotRoleMentions, threadName, toInbound } from '../src/discord.js';
 import { Logger } from '../src/log.js';
@@ -359,6 +359,187 @@ describe('DiscordBridge のボタン操作と受信の列', () => {
     await new Promise((r) => setTimeout(r, 60));
     await internals.inbound;
     expect(order).toEqual(['first', 'second']);
+  });
+});
+
+describe('DiscordBridge のスラッシュコマンドと右クリックメニューの受け付け', () => {
+  const GUILD = '100000000000000001';
+  const USER = '200000000000000001';
+  const STRANGER = '200000000000000099';
+  const CHANNEL = '500000000000000070';
+  const OTHER_CHANNEL = '500000000000000079';
+  const THREAD = '600000000000000071';
+  const ECHO = '800000000000000072';
+  const TARGET = '800000000000000073';
+  const TARGET_URL = `https://discord.com/channels/${GUILD}/${CHANNEL}/${TARGET}`;
+
+  type Where = 'channel' | 'thread' | 'other';
+
+  /** InteractionCreate を流せる本物の DiscordBridge。ハンドラに渡ったものを commands と messages に残す */
+  function setup() {
+    const commands: { command: unknown; ctx: unknown }[] = [];
+    const messages: { result: unknown; raw: unknown }[] = [];
+    const bridge = new DiscordBridge({
+      token: 'unused',
+      access: { guildId: GUILD, allowFrom: [USER], channels: [CHANNEL] },
+      logger: new Logger({ stderr: false }),
+    });
+    const internals = bridge as unknown as {
+      botUserId: string;
+      allowedConversations: Set<string>;
+      bindListeners: () => void;
+      inbound: Promise<void>;
+      client: { emit: (event: string, ...args: unknown[]) => boolean };
+    };
+    internals.botUserId = BOT;
+    internals.allowedConversations.add(CHANNEL);
+    internals.bindListeners();
+    void bridge.start({
+      onMessage: (result, raw) => void messages.push({ result, raw }),
+      onAction: () => undefined,
+      onCommand: (command, ctx) => void commands.push({ command, ctx }),
+    });
+    /** 応答と受信の列が終わるまで待つ */
+    const settle = async (): Promise<void> => {
+      for (let i = 0; i < 5; i++) {
+        await internals.inbound;
+        await new Promise((r) => setImmediate(r));
+      }
+    };
+    return { commands, messages, client: internals.client, settle };
+  }
+
+  /** 使われた場所。スレッドなら親を CHANNEL にする */
+  function place(where: Where) {
+    if (where === 'thread') return { channelId: THREAD, channel: { id: THREAD, type: ChannelType.PublicThread, parentId: CHANNEL } };
+    const id = where === 'channel' ? CHANNEL : OTHER_CHANNEL;
+    return { channelId: id, channel: { id, type: ChannelType.GuildText } };
+  }
+
+  /** 返事を replies に残す interaction の共通部分 */
+  function base(user: string, where: Where, replies: unknown[]) {
+    const p = place(where);
+    return {
+      ...p,
+      guildId: GUILD,
+      user: { id: user },
+      reply: async (opts: unknown) => void replies.push(opts),
+      fetchReply: async () => ({ id: ECHO, channelId: p.channelId }),
+    };
+  }
+
+  function slash(name: string, user: string, where: Where, replies: unknown[] = []) {
+    return {
+      ...base(user, where, replies),
+      isMessageContextMenuCommand: () => false,
+      isChatInputCommand: () => true,
+      commandName: name,
+      options: { getString: () => null, getBoolean: () => null },
+    };
+  }
+
+  /** 右クリックメニュー。選ばれたメッセージは CHANNEL の TARGET */
+  function forward(user: string, where: Where, replies: unknown[] = [], commandName = 'Claude に渡す') {
+    const target = {
+      id: TARGET,
+      url: TARGET_URL,
+      guildId: GUILD,
+      channelId: CHANNEL,
+      channel: { type: ChannelType.GuildText },
+      author: { id: STRANGER, bot: false },
+      webhookId: null,
+      type: MessageType.Default,
+      content: '渡したい本文',
+      embeds: [],
+      mentions: { roles: new Collection(), has: () => false, repliedUser: null },
+      createdAt: new Date('2026-10-26T00:00:00.000Z'),
+      attachments: new Collection(),
+    };
+    return {
+      ...base(user, where, replies),
+      isMessageContextMenuCommand: () => true,
+      isChatInputCommand: () => false,
+      commandName,
+      targetMessage: target,
+    };
+  }
+
+  const refusals = [
+    ['許可していない人', STRANGER, 'channel'],
+    ['許可していないチャンネル', USER, 'other'],
+  ] as const;
+
+  it('許可したチャンネルのスラッシュコマンドは、使ったことを返してからコマンドとして渡す', async () => {
+    const { commands, client, settle } = setup();
+    const replies: unknown[] = [];
+    client.emit(Events.InteractionCreate, slash('status', USER, 'channel', replies));
+    await settle();
+    expect(replies).toEqual([expect.objectContaining({ content: '⌨️ `/status`' })]);
+    expect(commands).toEqual([{ command: 'status', ctx: { userId: USER, channelId: CHANNEL, messageTs: ECHO, threadTs: undefined } }]);
+  });
+
+  it('スレッドの中のスラッシュコマンドは、親のチャンネルを会話、スレッドを返信先として渡す', async () => {
+    const { commands, client, settle } = setup();
+    client.emit(Events.InteractionCreate, slash('status', USER, 'thread'));
+    await settle();
+    expect(commands).toEqual([{ command: 'status', ctx: { userId: USER, channelId: CHANNEL, messageTs: ECHO, threadTs: THREAD } }]);
+  });
+
+  it.each(refusals)('%s のスラッシュコマンドは、本人にだけ断りを返し、渡さない', async (_label, user, where) => {
+    const { commands, client, settle } = setup();
+    const replies: unknown[] = [];
+    client.emit(Events.InteractionCreate, slash('status', user, where, replies));
+    await settle();
+    expect(replies).toEqual([expect.objectContaining({ flags: MessageFlags.Ephemeral })]);
+    expect(commands).toEqual([]);
+  });
+
+  it('知らないスラッシュコマンドは、本人にだけ断りを返し、渡さない', async () => {
+    const { commands, client, settle } = setup();
+    const replies: unknown[] = [];
+    client.emit(Events.InteractionCreate, slash('unknown', USER, 'channel', replies));
+    await settle();
+    expect(replies).toEqual([expect.objectContaining({ flags: MessageFlags.Ephemeral })]);
+    expect(commands).toEqual([]);
+  });
+
+  it('許可したチャンネルの右クリックメニューは、渡したことを返してから、選ばれたメッセージを転送として渡す', async () => {
+    const { messages, client, settle } = setup();
+    const replies: unknown[] = [];
+    client.emit(Events.InteractionCreate, forward(USER, 'channel', replies));
+    await settle();
+    expect(replies).toEqual([expect.objectContaining({ content: `📨 Claude に渡した: ${TARGET_URL}` })]);
+    expect(messages).toEqual([
+      {
+        result: expect.objectContaining({ kind: 'deliver', content: expect.stringContaining('渡したい本文') }),
+        raw: { channel: CHANNEL, ts: TARGET, threadTs: ECHO, user: USER },
+      },
+    ]);
+  });
+
+  it('スレッドの中の右クリックメニューは、そのスレッドを返信先にする', async () => {
+    const { messages, client, settle } = setup();
+    client.emit(Events.InteractionCreate, forward(USER, 'thread'));
+    await settle();
+    expect(messages).toEqual([expect.objectContaining({ raw: { channel: CHANNEL, ts: TARGET, threadTs: THREAD, user: USER } })]);
+  });
+
+  it.each(refusals)('%s の右クリックメニューは、本人にだけ断りを返し、渡さない', async (_label, user, where) => {
+    const { messages, client, settle } = setup();
+    const replies: unknown[] = [];
+    client.emit(Events.InteractionCreate, forward(user, where, replies));
+    await settle();
+    expect(replies).toEqual([expect.objectContaining({ flags: MessageFlags.Ephemeral })]);
+    expect(messages).toEqual([]);
+  });
+
+  it('知らない右クリックメニューには返事をせず、渡さない', async () => {
+    const { messages, client, settle } = setup();
+    const replies: unknown[] = [];
+    client.emit(Events.InteractionCreate, forward(USER, 'channel', replies, '別のメニュー'));
+    await settle();
+    expect(replies).toEqual([]);
+    expect(messages).toEqual([]);
   });
 });
 
