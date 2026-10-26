@@ -7,6 +7,7 @@ import { errMessage } from './errors.js';
 import { DEFAULT_KEEPALIVE_AFTER_MIN, DEFAULT_KEEPALIVE_MAX, DEFAULT_KEEPALIVE_QUIET, parseQuietHours } from './keepalive.js';
 import type { QuietHours } from './keepalive.js';
 import { stripBom } from './text.js';
+import { parseSwitch, unknownSwitchMessage } from './env-switch.js';
 
 /** 状態ディレクトリの既定の場所（ホームからの相対。scripts/start.ps1 の $DefaultStateDirRelative と同じ値にすること） */
 const DEFAULT_STATE_DIR_RELATIVE = ['.claude', 'channels', 'discord-bridge'];
@@ -103,11 +104,9 @@ function readInt(parsed: Record<string, string>, key: string, min: number, max: 
 
 /** .env の on / off の設定を読む。無い・空なら fallback。on / true / 1 か off / false / 0 でなければ投げる */
 function readSwitch(parsed: Record<string, string>, key: string, fallback: boolean): boolean {
-  const raw = (parsed[key] ?? '').trim();
-  if (raw === '') return fallback;
-  if (/^(on|true|1)$/i.test(raw)) return true;
-  if (/^(off|false|0)$/i.test(raw)) return false;
-  throw new Error(`${key} は on か off で指定する`);
+  const value = parseSwitch(parsed[key]);
+  if (value === null) throw new Error(`${key} は on か off で指定する`);
+  return value ?? fallback;
 }
 
 /** キャッシュのつなぎ止めの設定。KEEPALIVE は既定で on（off / false / 0 で止める） */
@@ -138,7 +137,8 @@ const BOT_TOKEN_RE = /^[\w-]{20,}\.[\w-]{5,}\.[\w-]{25,}$/;
  * dir/.env から DISCORD_BOT_TOKEN と、任意の DOWNLOAD_DIR・SESSION_ALLOW_ALL を読む。環境変数は見ない。
  * ファイルが読めない・キーが無い・トークンの形が違う・DOWNLOAD_DIR が絶対パスでないときは投げる（メッセージにトークンの値は含めない）。
  */
-export function loadTokens(dir: string): Tokens {
+/** warn は .env の値を読み替えたときの知らせ（起動は止めない）。省略時は知らせない */
+export function loadTokens(dir: string, warn?: (message: string) => void): Tokens {
   const file = path.join(dir, '.env');
   let text: string;
   try {
@@ -159,7 +159,9 @@ export function loadTokens(dir: string): Tokens {
     if (!path.isAbsolute(downloadDir)) throw new Error('DOWNLOAD_DIR は絶対パスで指定する');
     tokens.downloadDir = path.resolve(downloadDir);
   }
-  if (/^(on|true|1)$/i.test(parsed.SESSION_ALLOW_ALL ?? '')) tokens.sessionAllowAll = true;
+  const allowAll = parseSwitch(parsed.SESSION_ALLOW_ALL);
+  if (allowAll === true) tokens.sessionAllowAll = true;
+  if (allowAll === null) warn?.(unknownSwitchMessage('SESSION_ALLOW_ALL', parsed.SESSION_ALLOW_ALL ?? '', false));
   const inlineKb = readInt(parsed, 'INLINE_TEXT_MAX_KB', 0, 1024);
   if (inlineKb !== undefined) tokens.inlineTextMaxKb = inlineKb;
   const longReply = readInt(parsed, 'LONG_REPLY_CHARS', 0, 100_000);
