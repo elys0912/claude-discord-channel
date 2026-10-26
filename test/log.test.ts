@@ -103,6 +103,8 @@ describe('parseLogLevel', () => {
     [' error ', 'error'],
     ['info', 'info'],
     ['verbose', undefined],
+    // Object のプロトタイプのキーはレベルにしない
+    ['constructor', undefined],
     ['', undefined],
     [undefined, undefined],
   ] as const)('%j → %j', (value, expected) => {
