@@ -31,6 +31,7 @@ import type { ParsedAccess } from './config.js';
 import { errMessage } from './errors.js';
 import { neutralizeBroadcasts } from './format.js';
 import { EventDedupe, conversationOf, forwardDelivery, gate, threadOf } from './gate.js';
+import type { RemoteFile } from './download.js';
 import type { ChannelKind, GateResult, InboundMessage } from './gate.js';
 import type { Logger } from './log.js';
 import { DEFAULT_LONG_REPLY_CHARS, toLongReply } from './long-reply.js';
@@ -113,14 +114,8 @@ export interface AttachmentRef {
   threadId?: string | undefined;
 }
 
-/** 取りに行く添付の情報 */
-export interface RemoteFile {
-  id: string;
-  name: string;
-  size?: number | undefined;
-  mimetype?: string | undefined;
-  url: string;
-}
+/** 取りに行く添付の情報（download.ts で定義） */
+export type { RemoteFile };
 
 export interface DiscordDeps {
   token: string;
