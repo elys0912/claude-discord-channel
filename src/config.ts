@@ -136,8 +136,8 @@ const BOT_TOKEN_RE = /^[\w-]{20,}\.[\w-]{5,}\.[\w-]{25,}$/;
 /**
  * dir/.env から DISCORD_BOT_TOKEN と、任意の DOWNLOAD_DIR・SESSION_ALLOW_ALL を読む。環境変数は見ない。
  * ファイルが読めない・キーが無い・トークンの形が違う・DOWNLOAD_DIR が絶対パスでないときは投げる（メッセージにトークンの値は含めない）。
+ * warn は .env の値を読み替えたときの知らせ（起動は止めない）。省略時は知らせない。
  */
-/** warn は .env の値を読み替えたときの知らせ（起動は止めない）。省略時は知らせない */
 export function loadTokens(dir: string, warn?: (message: string) => void): Tokens {
   const file = path.join(dir, '.env');
   let text: string;
