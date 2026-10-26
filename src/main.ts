@@ -11,6 +11,7 @@ import { DiscordBridge } from './discord.js';
 import { DEFAULT_INLINE_LIMITS } from './inline-text.js';
 import type { InlineDeps } from './inline-text.js';
 import { startBridgeApp, startDegradedApp } from './app.js';
+import type { BridgeAppOptions } from './app.js';
 import { replyTimeoutMs } from './watchdog.js';
 import { PowerShellConsole, findConsoleScript } from './console.js';
 import { HOOK_LOG_FILE, SESSION_TAG_ENV } from './hook-event.js';
@@ -74,7 +75,7 @@ async function main(dir: string, logger: Logger): Promise<void> {
   const degraded = !lockResult.acquired;
   if (!lockResult.acquired) {
     process.stderr.write(
-      `[discordbridge] 別のインスタンスが動いている（pid=${lockResult.holder.pid}）。Discord には接続せず、MCP サーバーのみ起動する\n`
+      `[discordbridge] 別のインスタンスが動いている（pid=${lockResult.holder.pid}）。Discord には接続せず、MCP サーバーのみ起動する（30 秒ごとにロックを取り直す）\n`
     );
     logger.warn(`ロック取得に失敗（保持者 pid=${lockResult.holder.pid}）。縮退モードで起動する`);
   }
@@ -94,31 +95,62 @@ async function main(dir: string, logger: Logger): Promise<void> {
   );
 
   if (degraded) {
-    const app = await startDegradedApp({ logger });
+    // 縮退中もロックを取り直し、取れたら同じ MCP サーバーのまま通常のブリッジに戻る（終了処理は縮退モードの stop が引き継ぐ）
+    const app = await startDegradedApp({
+      logger,
+      relock: {
+        lock,
+        promote: async (server) => {
+          const bridge = await initBridge(tokens, access, logger);
+          try {
+            return await startBridgeApp({ ...bridgeAppOptions(dir, tokens, logger, bridge), lock, server, onCleanupReady: (stop) => (stopApp = stop) });
+          } catch (e) {
+            stopApp = undefined;
+            throw e;
+          }
+        },
+      },
+    });
     installShutdown(logger, app.stop);
     return;
   }
 
-  const bridge = new DiscordBridge({ token: tokens.botToken, access, logger, longReplyChars: tokens.longReplyChars });
+  let bridge: DiscordBridge;
   try {
-    const init = await bridge.init();
-    logger.info(`Discord 接続確認 OK bot=${init.botTag}(${init.botUserId}) guild=${init.guildName} dm=${init.dmChannelCount}件`);
+    bridge = await initBridge(tokens, access, logger);
   } catch (e) {
-    return abort(logger, 'Discord への接続に失敗', e, async () => {
-      lock.release();
-      await bridge.stop();
-    });
+    return abort(logger, 'Discord への接続に失敗', e, () => lock.release());
   }
 
   // 開始に失敗したら startBridgeApp が後片付けしてから投げる
   await startBridgeApp({
-    bridge,
-    logger,
+    ...bridgeAppOptions(dir, tokens, logger, bridge),
     lock,
     onCleanupReady: (stop) => {
       stopApp = stop;
       installShutdown(logger, stop);
     },
+  });
+}
+
+/** DiscordBridge を作って接続を確かめる。失敗したら止めてから投げる */
+async function initBridge(tokens: Tokens, access: ParsedAccess, logger: Logger): Promise<DiscordBridge> {
+  const bridge = new DiscordBridge({ token: tokens.botToken, access, logger, longReplyChars: tokens.longReplyChars });
+  try {
+    const init = await bridge.init();
+    logger.info(`Discord 接続確認 OK bot=${init.botTag}(${init.botUserId}) guild=${init.guildName} dm=${init.dmChannelCount}件`);
+    return bridge;
+  } catch (e) {
+    await bridge.stop();
+    throw e;
+  }
+}
+
+/** 通常のブリッジの設定（ロック・終了処理・MCP サーバーの渡し方は呼び出し側で足す） */
+function bridgeAppOptions(dir: string, tokens: Tokens, logger: Logger, bridge: DiscordBridge): BridgeAppOptions {
+  return {
+    bridge,
+    logger,
     replyTimeoutMs: replyTimeoutMs(),
     console: consoleAccess(logger),
     workDir: process.cwd(),
@@ -153,7 +185,7 @@ async function main(dir: string, logger: Logger): Promise<void> {
       path.join(process.cwd(), '.claude', 'settings.json'),
       path.join(process.cwd(), '.claude', 'settings.local.json'),
     ],
-  });
+  };
 }
 
 /** テキストの添付を本文に差し込む設定。.env の INLINE_TEXT_MAX_KB が 0 なら差し込まない（省略時は既定の上限） */
