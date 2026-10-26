@@ -3,7 +3,7 @@ import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { errMessage } from './errors.js';
 import type { Logger } from './log.js';
 import type { InstanceLock } from './lock.js';
-import type { DiscordBridge, ActionContext, InboundRef } from './discord.js';
+import type { DiscordBridge, ActionContext, AttachmentRef, InboundRef } from './discord.js';
 import { ChannelServer } from './mcp.js';
 import type { McpDeps } from './mcp.js';
 import { PermissionRelay } from './permission-relay.js';
@@ -23,6 +23,9 @@ import { AllowRuleStore, buildRejectedRulesText, partitionStoredRules, readAsk, 
 import { SessionAllowAll } from './session-allow.js';
 import { downloadAttachment } from './download.js';
 import type { DownloadDeps } from './download.js';
+
+/** Discord のメッセージと添付の ID で指す添付の取得 */
+export type DiscordDownloadDeps = DownloadDeps<AttachmentRef>;
 import { HookInbox } from './hook-inbox.js';
 import { hookToNotice } from './hook-notices.js';
 import { NoticePoster } from './notice.js';
@@ -198,7 +201,7 @@ export function createToolHandlers(
   bridge: ToolBridge,
   logger: Logger,
   onActivity?: () => void,
-  download?: DownloadDeps,
+  download?: DiscordDownloadDeps,
   files?: Pick<FileSender, 'send'>,
   todo?: Pick<TodoBoard, 'update'>
 ): ToolHandlers {
@@ -563,7 +566,7 @@ export interface BridgeAppOptions {
   /** 作業フォルダー（!status とホームタブに出す）。省略時は「(不明)」 */
   workDir?: string | undefined;
   /** 添付の保存先と取得手段（.env の DOWNLOAD_DIR があるとき）。省略時は download_file を出さない */
-  download?: DownloadDeps | undefined;
+  download?: DiscordDownloadDeps | undefined;
   /**
    * Claude Code の hook が追記する記録（状態ディレクトリの hooks.jsonl）。読んで、ターミナル側の入力待ち・
    * 使用量の上限・セッションの開始と終了・圧縮を Discord に知らせる。省略時は読まない

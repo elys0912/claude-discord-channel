@@ -162,7 +162,9 @@ function bridgeAppOptions(dir: string, tokens: Tokens, logger: Logger, bridge: D
     // start.ps1 から起動されたときだけ値がある。無ければ（手で起動したなど）今までどおり全部の行を扱う
     sessionTag: process.env[SESSION_TAG_ENV] || undefined,
     restartFlagFile: path.join(dir, RESTART_FLAG_FILE),
-    download: tokens.downloadDir ? { bridge, dir: tokens.downloadDir } : undefined,
+    download: tokens.downloadDir
+      ? { info: (ref) => bridge.attachmentInfo(ref), fetch: (file, signal) => bridge.fetchFile(file, signal), dir: tokens.downloadDir }
+      : undefined,
     sessionAllowAll: tokens.sessionAllowAll === true,
     managedSettingsFiles: () => managedSettingsFiles(),
     todoProgress: tokens.todoProgress,
