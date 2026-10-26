@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ChannelType, Collection, Events, MessageFlags, MessageType } from 'discord.js';
-import type { Message } from 'discord.js';
-import { DiscordBridge, TEXT_CHUNK_MAX, embedText, normalizeBotRoleMentions, threadName, toInbound } from '../src/discord.js';
+import type { Channel, Message } from 'discord.js';
+import { DiscordBridge, TEXT_CHUNK_MAX, embedText, interactionConversation, normalizeBotRoleMentions, threadName, toInbound } from '../src/discord.js';
 import { Logger } from '../src/log.js';
 
 // 実在しない、形だけを合わせた ID（Discord の snowflake と同じ 19 桁）
@@ -71,6 +71,23 @@ describe('toInbound', () => {
   it('スレッドの発言だけ親のチャンネルを持つ', () => {
     expect(toInbound(message({ channelType: ChannelType.PublicThread }), BOT)).toMatchObject({ kind: 'thread', parentId: PARENT });
     expect(toInbound(message(), BOT)).toMatchObject({ kind: 'channel', parentId: undefined });
+  });
+});
+
+describe('interactionConversation（ボタン・スラッシュコマンド・右クリックの会話 ID）', () => {
+  const ch = (type: ChannelType, parentId?: string | null): Channel =>
+    ({ type, id: 'C-self', ...(parentId === undefined ? {} : { parentId }) }) as unknown as Channel;
+
+  it.each([
+    ['DM', ch(ChannelType.DM), 'G1', { kind: 'dm', conversationId: 'C-self' }],
+    ['テキストチャンネル', ch(ChannelType.GuildText), 'G1', { kind: 'channel', conversationId: 'C-self' }],
+    ['スレッドは親のチャンネル', ch(ChannelType.PublicThread, 'C-parent'), 'G1', { kind: 'thread', conversationId: 'C-parent' }],
+    ['フォーラムの投稿（スレッド）も親のフォーラム', ch(ChannelType.PublicThread, 'F-forum'), 'G1', { kind: 'thread', conversationId: 'F-forum' }],
+    ['親の分からないスレッドは空', ch(ChannelType.PrivateThread, null), 'G1', { kind: 'thread', conversationId: '' }],
+    ['channel が取れないサーバー内は other', null, 'G1', { kind: 'other', conversationId: 'C-self' }],
+    ['channel が取れない DM は dm', null, null, { kind: 'dm', conversationId: 'C-self' }],
+  ] as const)('%s', (_name, channel, guildId, expected) => {
+    expect(interactionConversation(channel, 'C-self', guildId)).toEqual(expected);
   });
 });
 
