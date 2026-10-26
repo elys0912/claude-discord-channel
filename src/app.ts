@@ -27,7 +27,7 @@ import { HookInbox } from './hook-inbox.js';
 import { hookToNotice } from './hook-notices.js';
 import { NoticePoster } from './notice.js';
 import { FileSender } from './send-file.js';
-import { Keepalive } from './keepalive.js';
+import { Keepalive, keepaliveStatusLine } from './keepalive.js';
 import type { QuietHours } from './keepalive.js';
 import { formatTime } from './text.js';
 import { TypingIndicator } from './typing.js';
@@ -746,7 +746,7 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
       pendingPermissions: relay.pendingCount(),
       lastHooks: inbox?.lastEvents(5) ?? [],
       sessionAllowSince: sessionAllow ? (sessionAllow.current?.since ?? null) : undefined,
-      keepalive: keepalive?.status(),
+      extraLines: keepalive ? [keepaliveStatusLine(keepalive.status())] : undefined,
       now: new Date(),
     });
   };
