@@ -23,9 +23,6 @@ import { AllowRuleStore, buildRejectedRulesText, partitionStoredRules, readAsk, 
 import { SessionAllowAll } from './session-allow.js';
 import { downloadAttachment } from './download.js';
 import type { DownloadDeps } from './download.js';
-
-/** Discord のメッセージと添付の ID で指す添付の取得 */
-export type DiscordDownloadDeps = DownloadDeps<AttachmentRef>;
 import { HookInbox } from './hook-inbox.js';
 import { hookToNotice } from './hook-notices.js';
 import { NoticePoster } from './notice.js';
@@ -38,6 +35,9 @@ import { PresenceUpdater } from './presence.js';
 import { TodoBoard } from './todo.js';
 import { inlineTextAttachments } from './inline-text.js';
 import type { InlineDeps } from './inline-text.js';
+
+/** Discord のメッセージと添付の ID で指す添付の取得 */
+export type DiscordDownloadDeps = DownloadDeps<AttachmentRef>;
 
 // Discord 側で「読んだ」「許可した」「拒否した」を示すリアクション
 export const REACTION = {
