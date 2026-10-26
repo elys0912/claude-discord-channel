@@ -41,6 +41,7 @@ import type { PresenceState } from './presence.js';
 import type { ActionParse } from './permission.js';
 import type { Command } from './app.js';
 import { APP_COMMANDS, FORWARD_COMMAND_NAME, checkUse, parseSlashCommand, sameCommands, slashEcho } from './slash.js';
+import { BoundedMap } from './bounded-map.js';
 
 /** 1 通の上限（2000 字）に、コードブロックを閉じ直す分の余裕を持たせる */
 export const TEXT_CHUNK_MAX = 1900;
@@ -125,29 +126,6 @@ export interface DiscordDeps {
   fetch?: typeof fetch;
   /** これを超える返信は冒頭と全文の添付にする（.env の LONG_REPLY_CHARS。0 なら分けて送る） */
   longReplyChars?: number | undefined;
-}
-
-/** 古いものから忘れる、大きさに上限のある Map */
-class BoundedMap<V> {
-  private readonly store = new Map<string, V>();
-  constructor(private readonly capacity: number) {}
-
-  get(key: string): V | undefined {
-    return this.store.get(key);
-  }
-
-  has(key: string): boolean {
-    return this.store.has(key);
-  }
-
-  set(key: string, value: V): void {
-    this.store.delete(key);
-    this.store.set(key, value);
-    if (this.store.size > this.capacity) {
-      const oldest = this.store.keys().next();
-      if (!oldest.done) this.store.delete(oldest.value);
-    }
-  }
 }
 
 function channelKind(channel: Channel): ChannelKind {

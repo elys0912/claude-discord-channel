@@ -99,7 +99,7 @@ export class RuleRelay {
       }
       this.opts.store.add(proposal.rule);
       this.opts.logger.info(`許可リストに追加 rule=${proposal.rule} by=${byUserId}`);
-      await this.report(pressed, `✅ 許可リストに追加した: ${proposal.rule}\n次に起動し直したときから有効。取り消すときは !rules から消す。`, 'ok');
+      await this.report(pressed, `✅ 許可リストに追加した: ${proposal.rule}（by ${byUserId}）\n次に起動し直したときから有効。取り消すときは !rules から消す。`, 'ok');
     } catch (e) {
       this.opts.logger.warn('許可リストへの追加に失敗', e);
       await this.report(pressed, `⚠️ 追加できなかった: ${proposal.rule}`, 'error');

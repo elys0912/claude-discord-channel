@@ -69,7 +69,7 @@ describe('RuleRelay', () => {
     await relay.confirm('prop0001', true, pressed, 'U1');
     expect(rules).toEqual(['Bash(git status)']);
     expect(posts.at(-1)?.kind).toBe('update');
-    expect(posts.at(-1)?.text).toContain('追加した: Bash(git status)');
+    expect(posts.at(-1)?.text).toContain('追加した: Bash(git status)（by U1）');
   });
 
   it('既にあるルールは確認を出さず、その旨を返す', async () => {

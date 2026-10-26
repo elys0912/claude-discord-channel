@@ -169,6 +169,13 @@ describe('loadTokens', () => {
     expect(loadTokens(dir).sessionAllowAll).toBe(true);
   });
 
+  it('SESSION_ALLOW_ALL が on / off 以外なら、起動は止めずに off にして知らせる', () => {
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nSESSION_ALLOW_ALL=yes\n`);
+    const warnings: string[] = [];
+    expect('sessionAllowAll' in loadTokens(dir, (m) => warnings.push(m))).toBe(false);
+    expect(warnings).toEqual(['.env の SESSION_ALLOW_ALL の値（3 文字）は on / off のどちらでもないので off にした']);
+  });
+
   it('INLINE_TEXT_MAX_KB を整数で読み、範囲外や数でなければ Error', () => {
     write(`DISCORD_BOT_TOKEN=${TOKEN}\nINLINE_TEXT_MAX_KB=0\n`);
     expect(loadTokens(dir).inlineTextMaxKb).toBe(0);
