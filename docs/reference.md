@@ -56,6 +56,7 @@
 | 変数 | 用途 |
 |---|---|
 | `DISCORD_CHANNEL_STATE_DIR` | 状態ディレクトリを変える（既定は `%USERPROFILE%\.claude\channels\discord-bridge`）。変えたら deny も書き換える（[権限の設計](security.md#権限の設計)） |
+| `DISCORD_CHANNEL_LOG_LEVEL` | ログのレベル（debug / info / warn / error。既定は info）。`start.ps1` を実行するシェルで設定すれば、ブリッジに渡す（[ログ](#ログ)） |
 | `DISCORD_CHANNEL_REPLY_TIMEOUT_MIN` | 無応答の警告を出すまでの分数（既定は 5、小数も可）。`0` で無効になる |
 | `DISCORD_CHANNEL_SETTINGS_FILE` / `DISCORD_CHANNEL_SESSION_TAG` | 起動スクリプトが `mcp.json` 経由でブリッジに渡す。手で設定する必要はない |
 | `ENABLE_CLAUDEAI_MCP_SERVERS` | 起動スクリプトが `false` を設定する。手で設定する必要はない |
@@ -68,7 +69,7 @@
 ## ログ
 
 - 出力先は `logs\bridge.log` と stderr。
-- レベルは info で固定（変える設定は無い）。
+- レベルの既定は info。環境変数 `DISCORD_CHANNEL_LOG_LEVEL`（debug / info / warn / error）で変えられる。`start.ps1` を実行するシェルで設定すれば、ブリッジに渡す。知らない値なら info のままにし、ログに警告を出す。
 - 5MB を超えると `bridge.log.1` に退避する。残すのは1世代だけで、古い `.1` は上書きする。
 - Gateway の接続の変化は `gateway: ready` / `resumed` / `reconnecting` として出る。回復できない理由（トークンの無効化・Intent の不許可など）で閉じたときは `gateway: 回復できない切断で、再接続しない` を error で出し、手元のセッションにも `kind="bridge_error"` で知らせる（Claude がターミナルに書く）。
 

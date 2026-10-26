@@ -172,6 +172,21 @@ function channelKind(channel: Channel): ChannelKind {
 }
 
 /**
+ * ボタン・スラッシュコマンド・右クリックメニューを使った場所の種類と、会話 ID（許可した会話かの判定に使う。スレッドなら親のチャンネル）。
+ * channel が取れなければ、guildId で DM か 'other' かを決める。親の分からないスレッドの会話 ID は ''（許可した会話に当たらない）
+ */
+export function interactionConversation(
+  channel: Channel | null,
+  channelId: string,
+  guildId: string | null
+): { kind: ChannelKind; conversationId: string } {
+  const kind = channel ? channelKind(channel) : guildId === null ? 'dm' : 'other';
+  if (kind !== 'thread') return { kind, conversationId: channelId };
+  const parentId = channel && 'parentId' in channel ? channel.parentId : null;
+  return { kind, conversationId: parentId ?? '' };
+}
+
+/**
  * ボットのロール（招待したときに Discord が自動で作る、ボットと同じ名前のロール）へのメンションを、ボット本人へのメンションに置き換える。
  * 入力欄のメンションの候補にはボット本人とこのロールの両方が出るので、どちらを選ばれても話しかけられたとみなすため
  */
@@ -464,9 +479,7 @@ export class DiscordBridge {
     if (!interaction.isButton() && !interaction.isStringSelectMenu()) return;
     const channel = interaction.channel;
     if (!channel) return;
-    const kind = channelKind(channel);
-    const parentId = kind === 'thread' && 'parentId' in channel ? (channel.parentId ?? '') : undefined;
-    const conversationId = kind === 'thread' ? (parentId ?? '') : channel.id;
+    const { kind, conversationId } = interactionConversation(channel, channel.id, interaction.guildId ?? null);
     // ボット自身のメッセージのボタンだけを扱う
     if (interaction.message.author.id !== this.botUserId) return;
     this.locations.set(interaction.message.id, channel.id);
@@ -518,9 +531,7 @@ export class DiscordBridge {
   private async answerSlash(interaction: ChatInputCommandInteraction): Promise<{ command: Command; ctx: ActionContext } | undefined> {
     try {
       const channel = interaction.channel ?? (await this.client.channels.fetch(interaction.channelId).catch(() => null));
-      const kind = channel ? channelKind(channel) : interaction.guildId === null ? 'dm' : 'other';
-      const parentId = kind === 'thread' && channel && 'parentId' in channel ? (channel.parentId ?? '') : undefined;
-      const conversationId = kind === 'thread' ? (parentId ?? '') : interaction.channelId;
+      const { kind, conversationId } = interactionConversation(channel, interaction.channelId, interaction.guildId ?? null);
       const parsed = parseSlashCommand(
         {
           name: interaction.commandName,
@@ -567,9 +578,7 @@ export class DiscordBridge {
     try {
       if (interaction.commandName !== FORWARD_COMMAND_NAME) return undefined;
       const channel = interaction.channel ?? (await this.client.channels.fetch(interaction.channelId).catch(() => null));
-      const kind = channel ? channelKind(channel) : interaction.guildId === null ? 'dm' : 'other';
-      const parentId = kind === 'thread' && channel && 'parentId' in channel ? (channel.parentId ?? '') : undefined;
-      const conversationId = kind === 'thread' ? (parentId ?? '') : interaction.channelId;
+      const { kind, conversationId } = interactionConversation(channel, interaction.channelId, interaction.guildId ?? null);
       const refused = checkUse({ guildId: interaction.guildId ?? null, userId: interaction.user.id, conversationId }, this.access, this.allowedConversations);
       if (refused) {
         this.logger.warn(`右クリックメニューを無視 reason=${refused} user=${interaction.user.id}`);

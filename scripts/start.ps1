@@ -323,10 +323,13 @@ $env:DISCORD_CHANNEL_SESSION_TAG = $sessionTag
 function New-ClaudeArgs {
     $extraServers = Read-ExtraMcpServers
     # ブリッジには状態ディレクトリと設定ファイルを環境変数で明示して渡す（claude.exe の環境の引き継ぎに頼らない）
+    $bridgeEnv = @{
+        DISCORD_CHANNEL_STATE_DIR = $stateDir; DISCORD_CHANNEL_SETTINGS_FILE = $settingsFile; DISCORD_CHANNEL_SESSION_TAG = $sessionTag
+    }
+    # ログのレベルは、このシェルで設定されていればブリッジに渡す（省略時はブリッジの既定の info）
+    if ($env:DISCORD_CHANNEL_LOG_LEVEL) { $bridgeEnv.DISCORD_CHANNEL_LOG_LEVEL = $env:DISCORD_CHANNEL_LOG_LEVEL }
     $mcpConfig = Write-McpConfig -FileName "$sessionName\mcp.json" -ServerName $ServerName -ScriptPath $mainJs `
-        -NodePath (Get-NodePath) -ExtraServers $extraServers -Env @{
-            DISCORD_CHANNEL_STATE_DIR = $stateDir; DISCORD_CHANNEL_SETTINGS_FILE = $settingsFile; DISCORD_CHANNEL_SESSION_TAG = $sessionTag
-        }
+        -NodePath (Get-NodePath) -ExtraServers $extraServers -Env $bridgeEnv
     $effectiveSettings = Get-EffectiveSettings -ExtraServers $extraServers
 
     # 各フラグの意味は docs/security.md の「権限の設計」を参照
