@@ -102,15 +102,12 @@ async function main(dir: string, logger: Logger): Promise<void> {
         lock,
         promote: async (server) => {
           const bridge = await initBridge(tokens, access, logger);
-          try {
-            return await startBridgeApp({ ...bridgeAppOptions(dir, tokens, logger, bridge), lock, server, onCleanupReady: (stop) => (stopApp = stop) });
-          } catch (e) {
-            stopApp = undefined;
-            throw e;
-          }
+          return startBridgeApp({ ...bridgeAppOptions(dir, tokens, logger, bridge), lock, server });
         },
       },
     });
+    // 戻った後や戻る途中にロックを取られたら、縮退モードごと止める（戻る途中なら、終わるのを待ってから通常のブリッジを止める）
+    stopApp = app.stop;
     installShutdown(logger, app.stop);
     return;
   }
