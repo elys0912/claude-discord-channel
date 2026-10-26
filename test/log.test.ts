@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Logger, redact } from '../src/log.js';
+import { Logger, parseLogLevel, redact } from '../src/log.js';
 
 describe('redact', () => {
   // 実在しない、形だけを合わせた値
@@ -93,5 +93,19 @@ describe('Logger', () => {
     const logger = new Logger({ file, stderr: false });
     // maxBytes に不正値を入れても例外を投げないことを確認（内部で吸収）
     expect(() => logger.info('x')).not.toThrow();
+  });
+});
+
+describe('parseLogLevel', () => {
+  it.each([
+    ['debug', 'debug'],
+    ['WARN', 'warn'],
+    [' error ', 'error'],
+    ['info', 'info'],
+    ['verbose', undefined],
+    ['', undefined],
+    [undefined, undefined],
+  ] as const)('%j → %j', (value, expected) => {
+    expect(parseLogLevel(value)).toBe(expected);
   });
 });

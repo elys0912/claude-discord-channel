@@ -11,6 +11,12 @@ const LEVEL_ORDER: Record<LogLevel, number> = {
   error: 3,
 };
 
+/** 文字列をログのレベルにする（大文字・小文字は問わない）。空・知らない値なら undefined */
+export function parseLogLevel(value: string | undefined): LogLevel | undefined {
+  const v = value?.trim().toLowerCase();
+  return v !== undefined && v in LEVEL_ORDER ? (v as LogLevel) : undefined;
+}
+
 // Discord のボットのトークン（`<ユーザー ID の base64>.<時刻>.<署名>` の 3 つの部分）、Webhook の URL に含まれるトークン、
 // Authorization ヘッダーの値（Bot / Bearer）をログから伏せる。
 const DISCORD_TOKEN_RE = /[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{25,}/g;
