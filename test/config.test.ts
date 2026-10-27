@@ -106,8 +106,18 @@ describe('loadTokens', () => {
     expect(loadTokens(dir)).toEqual({
       botToken: TOKEN,
       keepalive: { enabled: true, afterMin: 55, max: 6, quiet: { start: 60, end: 420 } },
+      usageWatch: { enabled: true, usageWarnPct: [80, 95], contextWarnPct: [70, 90] },
       todoProgress: true,
     });
+  });
+
+  it('USAGE_WATCH としきい値を読み、空なら知らせない・形が違えば投げる', () => {
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nUSAGE_WATCH=off\nUSAGE_WARN_PCT=90,50\nCONTEXT_WARN_PCT=\n`);
+    expect(loadTokens(dir).usageWatch).toEqual({ enabled: false, usageWarnPct: [50, 90], contextWarnPct: [] });
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nUSAGE_WARN_PCT=101\n`);
+    expect(() => loadTokens(dir)).toThrow(/USAGE_WARN_PCT/);
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nUSAGE_WATCH=maybe\n`);
+    expect(() => loadTokens(dir)).toThrow(/USAGE_WATCH は on か off/);
   });
 
   it('TODO_PROGRESS は既定で on、off で止め、それ以外は Error', () => {

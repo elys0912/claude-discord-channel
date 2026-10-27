@@ -60,6 +60,10 @@ GitHub Actions（`.github/workflows/ci.yml`）は、main への push と pull re
 | `src/typing.ts` | 「入力中…」の表示 |
 | `src/presence.ts` | ボットのステータス表示の状態の決定と、更新の間引き |
 | `src/keepalive.ts` | キャッシュのつなぎ止め |
+| `src/statusline.ts` | statusline の記録（usage.json） |
+| `src/usage-watch.ts` | 使用量とコンテキストの見張り |
+| `src/crash-notice.ts` | 想定外の終了から起動し直したことの知らせ |
+| `src/notify-cli.ts` | ブリッジが動いていないときの単発の知らせ |
 | `src/todo.ts` | `progress` ツールの実体（TODO の進み具合のカードの組み立てと、出したカードの書き換え） |
 | `src/inline-text.ts` | テキストの添付を本文に差し込む |
 | `src/long-reply.ts` | 長い返信を、冒頭の本文と全文の添付に分ける |

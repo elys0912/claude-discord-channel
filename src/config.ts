@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { errMessage } from './errors.js';
 import { DEFAULT_KEEPALIVE_AFTER_MIN, DEFAULT_KEEPALIVE_MAX, DEFAULT_KEEPALIVE_QUIET, parseQuietHours } from './keepalive.js';
 import type { QuietHours } from './keepalive.js';
+import { DEFAULT_CONTEXT_WARN_PCT, DEFAULT_USAGE_WARN_PCT, parsePercents } from './usage-watch.js';
 import { stripBom } from './text.js';
 import { parseSwitch, unknownSwitchMessage } from './env-switch.js';
 
@@ -86,6 +87,8 @@ export interface Tokens {
   longReplyChars?: number;
   /** キャッシュのつなぎ止め（.env の KEEPALIVE / KEEPALIVE_AFTER_MIN / KEEPALIVE_MAX / KEEPALIVE_QUIET） */
   keepalive: { enabled: boolean; afterMin: number; max: number; quiet: QuietHours | undefined };
+  /** 使用量とコンテキストの見張り（.env の USAGE_WATCH / USAGE_WARN_PCT / CONTEXT_WARN_PCT） */
+  usageWatch: { enabled: boolean; usageWarnPct: number[]; contextWarnPct: number[] };
   /** .env の TODO_PROGRESS。TODO の進み具合のカードを出すか（既定 on） */
   todoProgress: boolean;
 }
@@ -107,6 +110,26 @@ function readSwitch(parsed: Record<string, string>, key: string, fallback: boole
   const value = parseSwitch(parsed[key]);
   if (value === null) throw new Error(`${key} は on か off で指定する`);
   return value ?? fallback;
+}
+
+/** 割合の並びの設定（`80,95`）。無ければ fallback。形が違えば投げる */
+function readPercents(parsed: Record<string, string>, key: string, fallback: readonly number[]): number[] {
+  const raw = parsed[key];
+  if (raw === undefined) return [...fallback];
+  try {
+    return parsePercents(raw);
+  } catch (e) {
+    throw new Error(`${key}: ${errMessage(e)}`, { cause: e });
+  }
+}
+
+/** 使用量とコンテキストの見張りの設定。USAGE_WATCH は既定で on（off / false / 0 で止める） */
+function readUsageWatch(parsed: Record<string, string>): Tokens['usageWatch'] {
+  return {
+    enabled: readSwitch(parsed, 'USAGE_WATCH', true),
+    usageWarnPct: readPercents(parsed, 'USAGE_WARN_PCT', DEFAULT_USAGE_WARN_PCT),
+    contextWarnPct: readPercents(parsed, 'CONTEXT_WARN_PCT', DEFAULT_CONTEXT_WARN_PCT),
+  };
 }
 
 /** キャッシュのつなぎ止めの設定。KEEPALIVE は既定で on（off / false / 0 で止める） */
@@ -152,7 +175,12 @@ export function loadTokens(dir: string, warn?: (message: string) => void): Token
   const botToken = parsed.DISCORD_BOT_TOKEN;
   if (!botToken) throw new Error('DISCORD_BOT_TOKEN が設定されていない');
   if (!BOT_TOKEN_RE.test(botToken)) throw new Error('DISCORD_BOT_TOKEN の形が不正（Developer Portal の Bot で発行したトークンを貼る）');
-  const tokens: Tokens = { botToken, keepalive: readKeepalive(parsed), todoProgress: readSwitch(parsed, 'TODO_PROGRESS', true) };
+  const tokens: Tokens = {
+    botToken,
+    keepalive: readKeepalive(parsed),
+    usageWatch: readUsageWatch(parsed),
+    todoProgress: readSwitch(parsed, 'TODO_PROGRESS', true),
+  };
   const downloadDir = parsed.DOWNLOAD_DIR;
   if (downloadDir) {
     // 相対パスはカレントディレクトリ（起動したプロジェクト）次第で保存先が変わるので受け付けない

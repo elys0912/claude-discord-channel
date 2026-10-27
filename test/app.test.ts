@@ -1845,3 +1845,46 @@ describe('CI の通知（ciWebhooks）', () => {
     expect(h.discord.of('postText').at(-1)).toMatchObject({ channel: CH, threadTs: '9900' });
   });
 });
+
+describe('使用量の見張りと、想定外の終了からの起動し直しの知らせ', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'app-usage-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('起動時に crash.json があれば知らせて消す', async () => {
+    const crashFile = path.join(dir, 'crash.json');
+    fs.writeFileSync(crashFile, JSON.stringify({ at: Date.now(), exit_code: 1, count: 1, max: 3, window_min: 10, resumed: true }));
+    const h = await startHarness(ACCESS, undefined, { crashFile });
+    try {
+      expect(h.discord.texts().some((t) => t.includes('想定外に終了した（exit code 1）'))).toBe(true);
+      expect(fs.existsSync(crashFile)).toBe(false);
+    } finally {
+      await h.client.close();
+      await h.stop();
+    }
+  });
+
+  it('usage.json の使用量がしきい値を越えたら知らせ、!status に使用量の行を出す', async () => {
+    const file = path.join(dir, 'usage.json');
+    const resetsAt = Math.floor(Date.now() / 1000) + 3600;
+    fs.writeFileSync(file, JSON.stringify({ at: Date.now(), five_hour: { used: 85, resets_at: resetsAt } }));
+    const h = await startHarness(ACCESS, undefined, {
+      usageWatch: { file, usageWarnPct: [80, 95], contextWarnPct: [70, 90], pollMs: 10 },
+    });
+    try {
+      await vi.waitFor(() => expect(h.discord.texts().some((t) => t.includes('使用量（5 時間枠）が 85%'))).toBe(true));
+      await h.discord.dm('!status');
+      await flush();
+      expect(h.discord.texts().at(-1)).toContain('使用量: 5 時間枠 85%');
+    } finally {
+      await h.client.close();
+      await h.stop();
+    }
+  });
+});
