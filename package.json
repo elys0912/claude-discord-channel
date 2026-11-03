@@ -18,7 +18,7 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.32.1",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "discord.js": "^14.27.0",
     "zod": "^4.6.7"
   },
@@ -27,7 +27,7 @@
     "@types/node": "^24.13.6",
     "eslint": "^10.13.0",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.72.0",
+    "typescript-eslint": "^8.72.1",
     "vitest": "^5.0.5"
   }
 }
