@@ -134,8 +134,7 @@ function readUsageWatch(parsed: Record<string, string>): Tokens['usageWatch'] {
 
 /** キャッシュのつなぎ止めの設定。KEEPALIVE は既定で on（off / false / 0 で止める） */
 function readKeepalive(parsed: Record<string, string>): Tokens['keepalive'] {
-  const raw = (parsed.KEEPALIVE ?? '').trim();
-  if (raw !== '' && !/^(on|true|1|off|false|0)$/i.test(raw)) throw new Error('KEEPALIVE は on か off で指定する');
+  const enabled = readSwitch(parsed, 'KEEPALIVE', true);
   let quiet: QuietHours | undefined = DEFAULT_KEEPALIVE_QUIET;
   if (parsed.KEEPALIVE_QUIET !== undefined) {
     try {
@@ -145,7 +144,7 @@ function readKeepalive(parsed: Record<string, string>): Tokens['keepalive'] {
     }
   }
   return {
-    enabled: !/^(off|false|0)$/i.test(raw),
+    enabled,
     // キャッシュの期限は 1 時間なので、それより前に送る
     afterMin: readInt(parsed, 'KEEPALIVE_AFTER_MIN', 1, 59) ?? DEFAULT_KEEPALIVE_AFTER_MIN,
     max: readInt(parsed, 'KEEPALIVE_MAX', 0, 48) ?? DEFAULT_KEEPALIVE_MAX,
@@ -175,37 +174,59 @@ export function loadTokens(dir: string, warn?: (message: string) => void): Token
   const botToken = parsed.DISCORD_BOT_TOKEN;
   if (!botToken) throw new Error('DISCORD_BOT_TOKEN が設定されていない');
   if (!BOT_TOKEN_RE.test(botToken)) throw new Error('DISCORD_BOT_TOKEN の形が不正（Developer Portal の Bot で発行したトークンを貼る）');
-  const tokens: Tokens = {
+  // 省略可能な項目は、設定が無ければ key ごと持たない。読む順（＝どの誤りを先に投げるか）は書いた順
+  return {
     botToken,
     keepalive: readKeepalive(parsed),
     usageWatch: readUsageWatch(parsed),
     todoProgress: readSwitch(parsed, 'TODO_PROGRESS', true),
+    ...readDownloadDir(parsed),
+    ...readSessionAllowAll(parsed, warn),
+    ...readReplyLimits(parsed),
+    ...readUpload(parsed),
   };
+}
+
+/** DOWNLOAD_DIR。無い・空なら設定しない。絶対パスでなければ投げる */
+function readDownloadDir(parsed: Record<string, string>): Pick<Tokens, 'downloadDir'> {
   const downloadDir = parsed.DOWNLOAD_DIR;
-  if (downloadDir) {
-    // 相対パスはカレントディレクトリ（起動したプロジェクト）次第で保存先が変わるので受け付けない
-    if (!path.isAbsolute(downloadDir)) throw new Error('DOWNLOAD_DIR は絶対パスで指定する');
-    tokens.downloadDir = path.resolve(downloadDir);
-  }
+  if (!downloadDir) return {};
+  // 相対パスはカレントディレクトリ（起動したプロジェクト）次第で保存先が変わるので受け付けない
+  if (!path.isAbsolute(downloadDir)) throw new Error('DOWNLOAD_DIR は絶対パスで指定する');
+  return { downloadDir: path.resolve(downloadDir) };
+}
+
+/** SESSION_ALLOW_ALL。on のときだけ設定する。知らない値は warn で知らせて off にする（起動は止めない） */
+function readSessionAllowAll(parsed: Record<string, string>, warn: ((message: string) => void) | undefined): Pick<Tokens, 'sessionAllowAll'> {
   const allowAll = parseSwitch(parsed.SESSION_ALLOW_ALL);
-  if (allowAll === true) tokens.sessionAllowAll = true;
   if (allowAll === null) warn?.(unknownSwitchMessage('SESSION_ALLOW_ALL', parsed.SESSION_ALLOW_ALL ?? '', false));
+  return allowAll === true ? { sessionAllowAll: true } : {};
+}
+
+/** INLINE_TEXT_MAX_KB と LONG_REPLY_CHARS。無い・空なら設定しない */
+function readReplyLimits(parsed: Record<string, string>): Pick<Tokens, 'inlineTextMaxKb' | 'longReplyChars'> {
   const inlineKb = readInt(parsed, 'INLINE_TEXT_MAX_KB', 0, 1024);
-  if (inlineKb !== undefined) tokens.inlineTextMaxKb = inlineKb;
   const longReply = readInt(parsed, 'LONG_REPLY_CHARS', 0, 100_000);
-  if (longReply !== undefined) tokens.longReplyChars = longReply;
+  return {
+    ...(inlineKb === undefined ? {} : { inlineTextMaxKb: inlineKb }),
+    ...(longReply === undefined ? {} : { longReplyChars: longReply }),
+  };
+}
+
+/** UPLOAD_DIRS と UPLOAD_MAX_MB。無い・空なら設定しない。UPLOAD_DIRS に絶対パスでないものがあれば投げる */
+function readUpload(parsed: Record<string, string>): Pick<Tokens, 'uploadDirs' | 'uploadMaxMb'> {
   const uploadDirs = (parsed.UPLOAD_DIRS ?? '')
     .split(';')
     .map((d) => d.trim())
     .filter((d) => d !== '');
-  if (uploadDirs.length > 0) {
-    // 相対パスはカレントディレクトリ次第で場所が変わるので受け付けない
-    if (uploadDirs.some((d) => !path.isAbsolute(d))) throw new Error('UPLOAD_DIRS は絶対パスを ; で区切って指定する');
-    tokens.uploadDirs = uploadDirs.map((d) => path.resolve(d));
-  }
+  // 相対パスはカレントディレクトリ次第で場所が変わるので受け付けない
+  if (uploadDirs.some((d) => !path.isAbsolute(d))) throw new Error('UPLOAD_DIRS は絶対パスを ; で区切って指定する');
   const uploadMb = readInt(parsed, 'UPLOAD_MAX_MB', 1, 100);
-  if (uploadMb !== undefined) tokens.uploadMaxMb = uploadMb;
-  return tokens;
+
+  return {
+    ...(uploadDirs.length === 0 ? {} : { uploadDirs: uploadDirs.map((d) => path.resolve(d)) }),
+    ...(uploadMb === undefined ? {} : { uploadMaxMb: uploadMb }),
+  };
 }
 
 /** Discord の ID（snowflake）。数字だけの 17〜20 桁 */

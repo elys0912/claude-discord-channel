@@ -2,6 +2,7 @@
 // relay 群は Discord の型を知らず Card だけを組む。上限（文字数・ボタンの数）はここで守る。
 import { ButtonStyle, ComponentType, escapeMarkdown } from 'discord.js';
 import type { APIActionRowComponent, APIComponentInMessageActionRow, APIEmbed } from 'discord.js';
+import { clip } from './text.js';
 
 /** Discord の上限（https://docs.discord.com/developers/resources/message の embed とコンポーネントの節） */
 export const LIMITS = {
@@ -67,11 +68,7 @@ export function md(text: string): string {
 
 /** 末尾を … にして max 文字に収める（サロゲートペアの途中では切らない） */
 export function clipTo(text: string, max: number): { text: string; clipped: boolean } {
-  if (text.length <= max) return { text, clipped: false };
-  let cut = Math.max(0, max - 1);
-  const code = text.charCodeAt(cut - 1);
-  if (code >= 0xd800 && code <= 0xdbff) cut -= 1;
-  return { text: text.slice(0, cut) + '…', clipped: true };
+  return { text: clip(text, max), clipped: text.length > max };
 }
 
 /**
@@ -131,65 +128,77 @@ function buildDescription(body: string | undefined, code: string | undefined): {
  * ボタンや行の数・custom_id の長さが上限を超えたら投げる（組み立てる側の誤りなので、黙って落とさない）。
  */
 export function toDiscord(card: Card): DiscordPayload {
-  let truncated = false;
-  const embed: APIEmbed = {};
-  if (card.color) embed.color = COLORS[card.color];
-  if (card.title) {
-    const t = clipTo(card.title, LIMITS.title);
-    embed.title = t.text;
-    truncated ||= t.clipped;
-  }
-  const description = buildDescription(card.body, card.code);
-  if (description.text !== undefined) embed.description = description.text;
-  truncated ||= description.clipped;
-  if (card.note) {
-    const n = clipTo(card.note, LIMITS.footer);
-    embed.footer = { text: n.text };
-    truncated ||= n.clipped;
-  }
-  // 中身の無い embed は送れないので、題も本文も無ければ空白を 1 つ入れる
-  if (embed.title === undefined && embed.description === undefined) embed.description = '​';
-
-  const components: DiscordPayload['components'] = [];
-  for (const row of card.buttons ?? []) {
-    if (row.length === 0) continue;
-    if (row.length > LIMITS.buttonsPerRow) throw new Error(`1 行のボタンが多すぎる（${row.length} 個）`);
-    components.push({
-      type: ComponentType.ActionRow,
-      components: row.map((b) => {
-        assertCustomId(b.id);
-        return {
-          type: ComponentType.Button,
-          style: BUTTON_STYLES[b.style ?? 'secondary'],
-          label: clipTo(b.label, LIMITS.buttonLabel).text,
-          custom_id: b.id,
-        };
-      }),
-    });
-  }
-  if (card.select) {
-    const s = card.select;
-    assertCustomId(s.id);
-    if (s.options.length === 0 || s.options.length > LIMITS.selectOptions) {
-      throw new Error(`選択メニューの選択肢の数が不正（${s.options.length} 個）`);
-    }
-    components.push({
-      type: ComponentType.ActionRow,
-      components: [
-        {
-          type: ComponentType.StringSelect,
-          custom_id: s.id,
-          placeholder: clipTo(s.placeholder, LIMITS.placeholder).text,
-          options: s.options.map((o) => ({
-            label: clipTo(o.label, LIMITS.selectText).text,
-            value: clipTo(o.value, LIMITS.selectText).text,
-            ...(o.description ? { description: clipTo(o.description, LIMITS.selectText).text } : {}),
-          })),
-        },
-      ],
-    });
-  }
+  const { embed, truncated } = buildEmbed(card);
+  const components = [...buildButtonRows(card.buttons ?? []), ...(card.select ? [buildSelectRow(card.select)] : [])];
   if (components.length > LIMITS.rows) throw new Error(`コンポーネントの行が多すぎる（${components.length} 行）`);
 
   return { embeds: [embed], components, truncated };
+}
+
+/**
+ * 中身の無い embed は Discord が受け付けないので、題も本文も無いときに入れる本文。
+ * 見た目は空にしたいので、空白に潰されないゼロ幅スペース（U+200B）にする
+ */
+const EMPTY_EMBED_DESCRIPTION = '​';
+
+/** 題・本文とコード・注記の embed。上限を超えた部分は切り詰め、truncated で知らせる */
+function buildEmbed(card: Card): { embed: APIEmbed; truncated: boolean } {
+  const embed: APIEmbed = {};
+  const title = card.title ? clipTo(card.title, LIMITS.title) : undefined;
+  const description = buildDescription(card.body, card.code);
+  const note = card.note ? clipTo(card.note, LIMITS.footer) : undefined;
+
+  if (card.color) embed.color = COLORS[card.color];
+  if (title) embed.title = title.text;
+  if (description.text !== undefined) embed.description = description.text;
+  if (note) embed.footer = { text: note.text };
+  if (embed.title === undefined && embed.description === undefined) embed.description = EMPTY_EMBED_DESCRIPTION;
+
+  const truncated = (title?.clipped ?? false) || description.clipped || (note?.clipped ?? false);
+  return { embed, truncated };
+}
+
+/** ボタンの行。空の行は飛ばす。1 行のボタンの数・custom_id の長さが上限を超えたら投げる */
+function buildButtonRows(rows: readonly CardButton[][]): DiscordPayload['components'] {
+  return rows
+    .filter((row) => row.length > 0)
+    .map((row) => {
+      if (row.length > LIMITS.buttonsPerRow) throw new Error(`1 行のボタンが多すぎる（${row.length} 個）`);
+      return {
+        type: ComponentType.ActionRow,
+        components: row.map((b) => {
+          assertCustomId(b.id);
+          return {
+            type: ComponentType.Button,
+            style: BUTTON_STYLES[b.style ?? 'secondary'],
+            label: clipTo(b.label, LIMITS.buttonLabel).text,
+            custom_id: b.id,
+          };
+        }),
+      };
+    });
+}
+
+/** 選択メニューの行。選択肢の数・custom_id の長さが上限を超えたら投げる */
+function buildSelectRow(select: CardSelect): DiscordPayload['components'][number] {
+  assertCustomId(select.id);
+  if (select.options.length === 0 || select.options.length > LIMITS.selectOptions) {
+    throw new Error(`選択メニューの選択肢の数が不正（${select.options.length} 個）`);
+  }
+
+  return {
+    type: ComponentType.ActionRow,
+    components: [
+      {
+        type: ComponentType.StringSelect,
+        custom_id: select.id,
+        placeholder: clipTo(select.placeholder, LIMITS.placeholder).text,
+        options: select.options.map((o) => ({
+          label: clipTo(o.label, LIMITS.selectText).text,
+          value: clipTo(o.value, LIMITS.selectText).text,
+          ...(o.description ? { description: clipTo(o.description, LIMITS.selectText).text } : {}),
+        })),
+      },
+    ],
+  };
 }

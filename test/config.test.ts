@@ -4,6 +4,17 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { loadAccess, loadTokens, parseDotenv, stateDir } from '../src/config.js';
 
+/** fn が投げた Error のメッセージ。投げなかったときや Error 以外を投げたときは、その場で落とす */
+function thrownMessage(fn: () => unknown): string {
+  try {
+    fn();
+  } catch (e) {
+    expect(e).toBeInstanceOf(Error);
+    return e instanceof Error ? e.message : String(e);
+  }
+  throw new Error('例外が投げられなかった');
+}
+
 describe('stateDir', () => {
   it('環境変数があればそれを使う', () => {
     const abs = path.resolve(os.tmpdir(), 'custom', 'dir');
@@ -111,33 +122,34 @@ describe('loadTokens', () => {
     });
   });
 
-  it('USAGE_WATCH としきい値を読み、空なら知らせない・形が違えば投げる', () => {
+  it('USAGE_WATCH=off としきい値を読み、しきい値は小さい順に並べ、空なら知らせない', () => {
     write(`DISCORD_BOT_TOKEN=${TOKEN}\nUSAGE_WATCH=off\nUSAGE_WARN_PCT=90,50\nCONTEXT_WARN_PCT=\n`);
     expect(loadTokens(dir).usageWatch).toEqual({ enabled: false, usageWarnPct: [50, 90], contextWarnPct: [] });
-    write(`DISCORD_BOT_TOKEN=${TOKEN}\nUSAGE_WARN_PCT=101\n`);
-    expect(() => loadTokens(dir)).toThrow(/USAGE_WARN_PCT/);
-    write(`DISCORD_BOT_TOKEN=${TOKEN}\nUSAGE_WATCH=maybe\n`);
-    expect(() => loadTokens(dir)).toThrow(/USAGE_WATCH は on か off/);
   });
 
-  it('TODO_PROGRESS は既定で on、off で止め、それ以外は Error', () => {
-    write(`DISCORD_BOT_TOKEN=${TOKEN}\nTODO_PROGRESS=off\n`);
-    expect(loadTokens(dir).todoProgress).toBe(false);
-    write(`DISCORD_BOT_TOKEN=${TOKEN}\nTODO_PROGRESS=ON\n`);
-    expect(loadTokens(dir).todoProgress).toBe(true);
-    write(`DISCORD_BOT_TOKEN=${TOKEN}\nTODO_PROGRESS=yes\n`);
-    expect(() => loadTokens(dir)).toThrow(/TODO_PROGRESS は on か off/);
+  it.each([
+    ['off', false],
+    ['ON', true],
+  ])('TODO_PROGRESS=%s なら todoProgress は %s', (value, expected) => {
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nTODO_PROGRESS=${value}\n`);
+    expect(loadTokens(dir).todoProgress).toBe(expected);
   });
 
-  it('KEEPALIVE の設定を読み、off・時間帯なし・範囲外を扱う', () => {
+  it('KEEPALIVE の設定を読み、off と時間帯なしを扱う', () => {
     write(`DISCORD_BOT_TOKEN=${TOKEN}\nKEEPALIVE=off\nKEEPALIVE_AFTER_MIN=50\nKEEPALIVE_MAX=3\nKEEPALIVE_QUIET=\n`);
     expect(loadTokens(dir).keepalive).toEqual({ enabled: false, afterMin: 50, max: 3, quiet: undefined });
-    write(`DISCORD_BOT_TOKEN=${TOKEN}\nKEEPALIVE_AFTER_MIN=60\n`);
-    expect(() => loadTokens(dir)).toThrow(/KEEPALIVE_AFTER_MIN/);
-    write(`DISCORD_BOT_TOKEN=${TOKEN}\nKEEPALIVE_QUIET=1-7\n`);
-    expect(() => loadTokens(dir)).toThrow(/KEEPALIVE_QUIET/);
-    write(`DISCORD_BOT_TOKEN=${TOKEN}\nKEEPALIVE=maybe\n`);
-    expect(() => loadTokens(dir)).toThrow(/KEEPALIVE は on か off/);
+  });
+
+  it.each([
+    ['USAGE_WARN_PCT=101', /USAGE_WARN_PCT/],
+    ['USAGE_WATCH=maybe', /USAGE_WATCH は on か off/],
+    ['TODO_PROGRESS=yes', /TODO_PROGRESS は on か off/],
+    ['KEEPALIVE_AFTER_MIN=60', /KEEPALIVE_AFTER_MIN/],
+    ['KEEPALIVE_QUIET=1-7', /KEEPALIVE_QUIET/],
+    ['KEEPALIVE=maybe', /KEEPALIVE は on か off/],
+  ])('.env の %s は範囲外・形の違いとして Error', (line, error) => {
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\n${line}\n`);
+    expect(() => loadTokens(dir)).toThrow(error);
   });
 
   it('ファイルが無ければ Error', () => {
@@ -151,16 +163,8 @@ describe('loadTokens', () => {
 
   it('トークンの形が違えば Error（値を含まない）', () => {
     write('DISCORD_BOT_TOKEN=wrong-shape-TEST-DUMMY\n');
-    let caught: unknown;
-    try {
-      loadTokens(dir);
-    } catch (e) {
-      caught = e;
-    }
-    expect(caught).toBeInstanceOf(Error);
-    const message = (caught as Error).message;
-    expect(message).not.toContain('wrong-shape-TEST-DUMMY');
-    expect(message).toContain('DISCORD_BOT_TOKEN');
+    expect(() => loadTokens(dir)).toThrow(/DISCORD_BOT_TOKEN/);
+    expect(thrownMessage(() => loadTokens(dir))).not.toContain('wrong-shape-TEST-DUMMY');
   });
 
   it('DOWNLOAD_DIR があれば絶対パスとして downloadDir に入れる', () => {

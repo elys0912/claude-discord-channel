@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ApplicationCommandType } from 'discord.js';
 import { APP_COMMANDS, FORWARD_COMMAND, SLASH_COMMANDS, checkUse, parseSlashCommand, sameCommands, slashEcho } from '../src/slash.js';
-import { parseCommand } from '../src/app.js';
+import { parseCommand } from '../src/commands.js';
 import type { SlashInput } from '../src/slash.js';
 import type { ParsedAccess } from '../src/config.js';
 

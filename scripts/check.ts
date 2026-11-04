@@ -1,7 +1,7 @@
 // `npm run check` から実行される、Discord のボットの疎通確認コマンド。
 // トークンそのものは絶対に表示しない。ボットとして読み取りだけを行い、何も送信しない。
 import { ChannelType, Client, Events, GatewayIntentBits, PermissionFlagsBits } from 'discord.js';
-import type { PermissionResolvable } from 'discord.js';
+import type { Guild, PermissionResolvable } from 'discord.js';
 import { loadAccess, loadTokens, stateDir } from '../src/config.js';
 import { errMessage } from '../src/errors.js';
 
@@ -24,7 +24,7 @@ async function main(): Promise<void> {
   const dir = stateDir();
   console.log(`状態ディレクトリ: ${dir}`);
 
-  let tokens;
+  let tokens: ReturnType<typeof loadTokens>;
   try {
     tokens = loadTokens(dir);
   } catch (e) {
@@ -44,6 +44,30 @@ async function main(): Promise<void> {
 
   // ブリッジと同じく Message Content Intent も要求する。Developer Portal で OFF なら、ブリッジの起動と同じくここでログインに失敗する
   const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.MessageContent] });
+  if (!(await login(client, tokens.botToken))) {
+    await client.destroy();
+    process.exitCode = 1;
+    return;
+  }
+
+  try {
+    reportBot(client);
+    if (!access) return;
+
+    const guild = reportGuild(client, access.guildId);
+    if (!guild) {
+      process.exitCode = 1;
+      return;
+    }
+    await reportUsers(client, access.allowFrom);
+    await reportChannels(client, guild, access.channels ?? []);
+  } finally {
+    await client.destroy();
+  }
+}
+
+/** ログインして準備を待つ。失敗したら理由の見当を出して false */
+async function login(client: Client, botToken: string): Promise<boolean> {
   try {
     const ready = new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('準備が時間内に終わらなかった')), READY_TIMEOUT_MS);
@@ -52,8 +76,9 @@ async function main(): Promise<void> {
         resolve();
       });
     });
-    await client.login(tokens.botToken);
+    await client.login(botToken);
     await ready;
+    return true;
   } catch (e) {
     console.error(`[check] ログインに失敗: ${errMessage(e)}`);
     if (/disallowed intents/i.test(errMessage(e))) {
@@ -61,55 +86,58 @@ async function main(): Promise<void> {
     } else {
       console.error('  トークンが古い（リセットした）か、貼り間違えている可能性がある。Developer Portal の Bot でリセットし直して');
     }
-    await client.destroy();
-    process.exitCode = 1;
-    return;
+    return false;
   }
+}
 
-  try {
-    console.log('--- ボット ---');
-    console.log(`名前: ${client.user?.tag ?? '(不明)'}  ID: ${client.user?.id ?? '(不明)'}`);
-    console.log(`参加しているサーバー: ${client.guilds.cache.map((g) => `${g.name}（${g.id}）`).join(', ') || '(無し)'}`);
-    if (!access) return;
+function reportBot(client: Client): void {
+  console.log('--- ボット ---');
+  console.log(`名前: ${client.user?.tag ?? '(不明)'}  ID: ${client.user?.id ?? '(不明)'}`);
+  console.log(`参加しているサーバー: ${client.guilds.cache.map((g) => `${g.name}（${g.id}）`).join(', ') || '(無し)'}`);
+}
 
-    const guild = client.guilds.cache.get(access.guildId);
-    if (!guild) {
-      console.warn(`[check] 警告: access.json の guildId（${access.guildId}）のサーバーにボットが入っていない。招待 URL から招待して`);
-      process.exitCode = 1;
-      return;
+/** access.json の guildId のサーバーにボットが入っているか。入っていなければ警告を出して undefined */
+function reportGuild(client: Client, guildId: string): Guild | undefined {
+  const guild = client.guilds.cache.get(guildId);
+  if (!guild) {
+    console.warn(`[check] 警告: access.json の guildId（${guildId}）のサーバーにボットが入っていない。招待 URL から招待して`);
+    return undefined;
+  }
+  console.log(`guildId: OK（${guild.name}）`);
+  return guild;
+}
+
+async function reportUsers(client: Client, userIds: readonly string[]): Promise<void> {
+  console.log('--- allowFrom ---');
+  for (const userId of userIds) {
+    try {
+      const user = await client.users.fetch(userId);
+      console.log(`${userId}: ${user.tag}`);
+    } catch (e) {
+      console.log(`${userId}: ユーザーが見つからない（${errMessage(e)}）`);
     }
-    console.log(`guildId: OK（${guild.name}）`);
+  }
+}
 
-    console.log('--- allowFrom ---');
-    for (const userId of access.allowFrom) {
-      try {
-        const user = await client.users.fetch(userId);
-        console.log(`${userId}: ${user.tag}`);
-      } catch (e) {
-        console.log(`${userId}: ユーザーが見つからない（${errMessage(e)}）`);
-      }
+/** チャンネルごとに、このサーバーのテキストチャンネルかフォーラムか、ボットに要る権限が揃っているかを出す */
+async function reportChannels(client: Client, guild: Guild, channelIds: readonly string[]): Promise<void> {
+  console.log('--- channels ---');
+  const me = guild.members.me ?? (await guild.members.fetchMe());
+  for (const channelId of channelIds) {
+    const channel = await client.channels.fetch(channelId).catch(() => null);
+    if (!channel || channel.isDMBased() || !('guild' in channel) || channel.guild.id !== guild.id) {
+      console.log(`${channelId}: このサーバーのチャンネルとして見つからない`);
+      continue;
     }
-
-    console.log('--- channels ---');
-    const me = guild.members.me ?? (await guild.members.fetchMe());
-    for (const channelId of access.channels ?? []) {
-      const channel = await client.channels.fetch(channelId).catch(() => null);
-      if (!channel || channel.isDMBased() || !('guild' in channel) || channel.guild.id !== guild.id) {
-        console.log(`${channelId}: このサーバーのチャンネルとして見つからない`);
-        continue;
-      }
-      const isForum = channel.type === ChannelType.GuildForum;
-      if (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.GuildAnnouncement && !isForum) {
-        console.log(`${channelId}: テキストチャンネルでもフォーラムでもない（種類=${ChannelType[channel.type]}）`);
-        continue;
-      }
-      if (isForum) console.log(`${channelId}: フォーラム。投稿（スレッド）の中でボットにメンションして話しかける`);
-      const perms = channel.permissionsFor(me);
-      const missing = CHANNEL_PERMISSIONS.filter(([, flag]) => !perms.has(flag)).map(([name]) => name);
-      console.log(`${channelId}: #${channel.name} ${missing.length === 0 ? '権限 OK' : `足りない権限: ${missing.join('、')}`}`);
+    const isForum = channel.type === ChannelType.GuildForum;
+    if (channel.type !== ChannelType.GuildText && channel.type !== ChannelType.GuildAnnouncement && !isForum) {
+      console.log(`${channelId}: テキストチャンネルでもフォーラムでもない（種類=${ChannelType[channel.type]}）`);
+      continue;
     }
-  } finally {
-    await client.destroy();
+    if (isForum) console.log(`${channelId}: フォーラム。投稿（スレッド）の中でボットにメンションして話しかける`);
+    const perms = channel.permissionsFor(me);
+    const missing = CHANNEL_PERMISSIONS.filter(([, flag]) => !perms.has(flag)).map(([name]) => name);
+    console.log(`${channelId}: #${channel.name} ${missing.length === 0 ? '権限 OK' : `足りない権限: ${missing.join('、')}`}`);
   }
 }
 

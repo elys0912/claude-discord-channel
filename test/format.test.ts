@@ -24,19 +24,19 @@ describe('neutralizeBroadcasts', () => {
 });
 
 describe('sanitizeMeta', () => {
-  it('drops undefined values', () => {
+  it('値が undefined の項目は落とす', () => {
     expect(sanitizeMeta({ a: '1', b: undefined })).toEqual({ a: '1' });
   });
 
-  it('drops keys with invalid characters', () => {
+  it('英数字と _ 以外を含むキーは落とす', () => {
     expect(sanitizeMeta({ 'a-b': '1', valid_key: '2', 'c.d': '3' })).toEqual({ valid_key: '2' });
   });
 
-  it('keeps keys with letters, numbers, underscore', () => {
+  it('英字・数字・_ だけのキーは残す', () => {
     expect(sanitizeMeta({ Chat_ID2: 'x' })).toEqual({ Chat_ID2: 'x' });
   });
 
-  it('returns empty object for empty input', () => {
+  it('空のオブジェクトには空のオブジェクトを返す', () => {
     expect(sanitizeMeta({})).toEqual({});
   });
 

@@ -1,24 +1,19 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, expect, it } from 'vitest';
+import { describeOnWindows, runPowerShellCommand } from './helpers/powershell.js';
 
 const common = path.join(import.meta.dirname, '..', 'scripts', 'common.ps1');
 
 /** common.ps1 を読み込んでから command を実行し、stdout を返す */
 function ps(command: string): string {
-  const r = spawnSync(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `. '${common}'; ${command}`],
-    { encoding: 'utf8', windowsHide: true }
-  );
+  const r = runPowerShellCommand(`. '${common}'; ${command}`);
   if (r.status !== 0) throw new Error(`powershell が失敗: ${r.stderr}`);
   return r.stdout.trim();
 }
 
-// powershell.exe の起動は CI の初回だと 5 秒を超えることがある
-describe.runIf(process.platform === 'win32')('scripts/common.ps1 の Read-RestartSessionId', { timeout: 30000 }, () => {
+describeOnWindows('scripts/common.ps1 の Read-RestartSessionId', 30000, () => {
   let dir: string;
   let flag: string;
 
@@ -90,7 +85,7 @@ describe.runIf(process.platform === 'win32')('scripts/common.ps1 の Read-Restar
   });
 });
 
-describe.runIf(process.platform === 'win32')('scripts/common.ps1 の Test-PlaceholderServer', { timeout: 30000 }, () => {
+describeOnWindows('scripts/common.ps1 の Test-PlaceholderServer', 30000, () => {
   let dir: string;
   let config: string;
   const mainJs = 'C:\\repo\\dist\\src\\main.js';
@@ -116,26 +111,23 @@ describe.runIf(process.platform === 'win32')('scripts/common.ps1 の Test-Placeh
     expect(test('c:\\dev\\')).toBe('True');
   });
 
-  it('別のフォルダー・別の名前・中身が違う登録・ファイルが無い・読めないなら false（登録し直す）', () => {
-    write({ 'C:/dev': { mcpServers: { discordbridge: entry } } });
-    expect(test('C:\\dev\\portfolio')).toBe('False');
-    write({ 'C:/dev': { mcpServers: { other: entry } } });
-    expect(test('C:\\dev')).toBe('False');
-    write({ 'C:/dev': { mcpServers: { discordbridge: { ...entry, args: ['-e', 'process.exit(0)'] } } } });
-    expect(test('C:\\dev')).toBe('False');
-    write({ 'C:/dev': { mcpServers: { discordbridge: { ...entry, env: {} } } } });
-    expect(test('C:\\dev')).toBe('False');
-    write({ 'C:/dev': {} });
-    expect(test('C:\\dev')).toBe('False');
-    fs.writeFileSync(config, 'not json');
-    expect(test('C:\\dev')).toBe('False');
-    fs.rmSync(config);
-    expect(test('C:\\dev')).toBe('False');
+  // 1 件ごとに powershell.exe を 1 回起動するのは、1 本にまとめていたときと同じ
+  it.each([
+    ['別のフォルダー', () => write({ 'C:/dev': { mcpServers: { discordbridge: entry } } }), 'C:\\dev\\portfolio'],
+    ['別の名前の登録', () => write({ 'C:/dev': { mcpServers: { other: entry } } }), 'C:\\dev'],
+    ['起動の中身（args）が違う登録', () => write({ 'C:/dev': { mcpServers: { discordbridge: { ...entry, args: ['-e', 'process.exit(0)'] } } } }), 'C:\\dev'],
+    ['待つだけの印（env）が無い登録', () => write({ 'C:/dev': { mcpServers: { discordbridge: { ...entry, env: {} } } } }), 'C:\\dev'],
+    ['登録が無い', () => write({ 'C:/dev': {} }), 'C:\\dev'],
+    ['JSON として読めない', () => fs.writeFileSync(config, 'not json'), 'C:\\dev'],
+    ['ファイルが無い', () => undefined, 'C:\\dev'],
+  ])('%s なら false（登録し直す）', (_label, arrange, projectDir) => {
+    arrange();
+    expect(test(projectDir)).toBe('False');
   });
 });
 
 // start.ps1 の New-ClaudeArgs が起動のたびに行う、merged.json の組み立て（D-SC-04 / D-DC-02）
-describe.runIf(process.platform === 'win32')('scripts/common.ps1 の Read-AllowExtra / Write-EffectiveSettings', { timeout: 30000 }, () => {
+describeOnWindows('scripts/common.ps1 の Read-AllowExtra / Write-EffectiveSettings', 30000, () => {
   let dir: string;
   let allowExtra: string;
   let checker: string;
@@ -209,7 +201,7 @@ describe.runIf(process.platform === 'win32')('scripts/common.ps1 の Read-AllowE
   });
 });
 
-describe.runIf(process.platform === 'win32')('scripts/common.ps1 の想定外の終了からの起動し直し', { timeout: 30000 }, () => {
+describeOnWindows('scripts/common.ps1 の想定外の終了からの起動し直し', 30000, () => {
   let dir: string;
 
   beforeEach(() => {

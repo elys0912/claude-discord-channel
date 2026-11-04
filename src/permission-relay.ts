@@ -87,8 +87,8 @@ export class PermissionRelay {
     return this.lastThreadRef;
   }
 
-  /** まだ Claude に回答を送っていない request の件数 */
-  pendingCount(): number {
+  /** まだ Claude に回答を送っていない request の件数（this.pending の件数ではない） */
+  unansweredCount(): number {
     return this.expiryTimers.size;
   }
 
@@ -110,11 +110,15 @@ export class PermissionRelay {
     this.startExpiryTimer(req.request_id);
 
     // 自動許可から外す ask を読めないときは、全部許可のボタンを出さない
-    const sessionButton = this.sessionAllow !== undefined && this.sessionAllow.current === undefined && this.sessionAllow.available();
+    const sessionButton = this.sessionAllow !== undefined && this.sessionAllow.canOffer();
     // 許可リストに足せるルールを作れないリクエストには「今後も許可」を出さない（その場の 1 回の許可だけにする）
     const { card } = buildPermissionCard(req, undefined, sessionButton, deriveRule(req).ok);
     if (await this.replyToLastThread(req, card)) return;
+    await this.deliverToAll(req, card);
+  }
 
+  /** 許可ユーザー全員の DM（会話中のスレッドがあればそこ）に配信する。1 件も届かなければその場で deny を返す */
+  private async deliverToAll(req: PermissionRequest, card: Card): Promise<void> {
     let results: MessageRef[] = [];
     try {
       results = await this.bridge.postToAll(card, (channel) => this.activeThread.get(channel));

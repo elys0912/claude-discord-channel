@@ -170,11 +170,9 @@ export class FakeDiscord implements AppBridge {
       const ts = this.record({ method: 'postText', channel, threadTs, text: long.content, files: [long.name] });
       return { ts: [ts], asFile: true };
     }
-    const ids: string[] = [];
-    for (const piece of chunkText(safe, TEXT_CHUNK_MAX)) {
-      ids.push(this.record({ method: 'postText', channel, threadTs, text: piece }));
-    }
-    return { ts: ids };
+    // 本物（DiscordBridge.postText）と同じく、分けた結果が空白だけになったチャンクは送らない
+    const pieces = chunkText(safe, TEXT_CHUNK_MAX).filter((piece) => piece.trim() !== '');
+    return { ts: pieces.map((piece) => this.record({ method: 'postText', channel, threadTs, text: piece })) };
   }
 
   async postCard(channel: string, card: Card, threadTs?: string): Promise<{ ts: string }> {
@@ -272,9 +270,20 @@ export class FakeDiscord implements AppBridge {
   /** 本物の DiscordBridge.handleMessage と同じ手順で、gate を通して app.ts に渡す */
   async receive(msg: InboundMessage): Promise<void> {
     if (!this.handlers) return;
-    const result = gate(msg, this.access, BOT, this.dedupe, this.handlers.isKnownRequest, (t) => this.activeThreads.has(t));
+    const result = gate(msg, {
+      access: this.access,
+      selfBotUserId: BOT,
+      dedupe: this.dedupe,
+      isKnownRequest: this.handlers.isKnownRequest,
+      isActiveThread: (t) => this.activeThreads.has(t),
+    });
     if (result.kind !== 'drop' && msg.kind !== 'dm') this.activeThreads.add(threadOf(msg));
     await this.handlers.onMessage(result, { channel: conversationOf(msg), ts: msg.messageId, threadTs: threadOf(msg), user: msg.authorId });
+  }
+
+  /** Gateway が回復できずに閉じたことを模す（本物の DiscordBridge が onGatewayLost を呼ぶ場面） */
+  async gatewayLost(detail: string): Promise<void> {
+    await this.handlers?.onGatewayLost?.(detail);
   }
 
   /** ボタンを押す・メニューで選ぶ（本物の DiscordBridge.handleInteraction と同じく parseInteraction を通す） */
@@ -381,7 +390,7 @@ export class FakeDiscord implements AppBridge {
   }
 
   private record(call: Omit<Call, 'ts'>): string {
-    const error = call.method !== 'sendTyping' ? this.failPost?.(call.channel) : undefined;
+    const error = this.failPost?.(call.channel);
     if (error) throw error;
     this.seq += 1;
     const ts = String(this.seq);
