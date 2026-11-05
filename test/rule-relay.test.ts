@@ -14,7 +14,8 @@ function plain(card: Card): string {
   return [card.title, card.body, card.code].filter(Boolean).join('\n').replace(/\\(.)/g, '$1');
 }
 
-function setup(deny: string[] = []) {
+// failRemove なら、ルールの削除で例外を投げる（許可リストのファイルを書けないとき）
+function setup(deny: string[] = [], { failRemove = false } = {}) {
   const rules: string[] = [];
   const posts: { kind: 'text' | 'card' | 'update'; text: string; card?: Card }[] = [];
   let t = 0;
@@ -28,6 +29,7 @@ function setup(deny: string[] = []) {
         return true;
       },
       remove: (r) => {
+        if (failRemove) throw new Error('EPERM');
         const i = rules.indexOf(r);
         if (i < 0) return false;
         rules.splice(i, 1);
@@ -141,6 +143,14 @@ describe('RuleRelay', () => {
     await relay.remove('prop0001', 1, pressed, 'U1');
     expect(rules).toEqual(['Bash(git status:*)']);
     expect(posts.at(-1)?.text).toContain('消した: WebFetch');
+  });
+
+  it('ルールを消せなかったら、一覧のカードを「消せなかった」に書き換える', async () => {
+    const { relay, rules, posts, pressed } = setup([], { failRemove: true });
+    rules.push('WebFetch');
+    await relay.list('C1', '90');
+    await relay.remove('prop0001', 0, pressed, 'U1');
+    expect(posts.at(-1)).toMatchObject({ kind: 'update', text: expect.stringContaining('消せなかった: WebFetch') });
   });
 
   it('消したあとの一覧や、期限切れの一覧からは消さない', async () => {

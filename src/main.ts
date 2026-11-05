@@ -91,10 +91,11 @@ async function main(dir: string, logger: Logger): Promise<void> {
   const lockResult = await acquireWithRetry(lock, { timeoutMs: LOCK_RETRY_MS, intervalMs: LOCK_RETRY_INTERVAL_MS });
   const degraded = !lockResult.acquired;
   if (!lockResult.acquired) {
+    const holderPid = lockResult.holder?.pid ?? '不明';
     process.stderr.write(
-      `[discordbridge] 別のインスタンスが動いている（pid=${lockResult.holder.pid}）。Discord には接続せず、MCP サーバーのみ起動する（30 秒ごとにロックを取り直す）\n`
+      `[discordbridge] 別のインスタンスが動いている（pid=${holderPid}）。Discord には接続せず、MCP サーバーのみ起動する（30 秒ごとにロックを取り直す）\n`
     );
-    logger.warn(`ロック取得に失敗（保持者 pid=${lockResult.holder.pid}）。縮退モードで起動する`);
+    logger.warn(`ロック取得に失敗（保持者 pid=${holderPid}）。縮退モードで起動する`);
   }
 
   let tokens: Tokens;

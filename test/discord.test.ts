@@ -684,6 +684,12 @@ describe('DiscordBridge のメッセージの在りか（thread_id の検証）'
     expect(touched).toEqual([{ channel: THREAD, op: 'react' }]);
   });
 
+  it('在りかを覚えていないスレッドの中のカードは、渡されたスレッドの ID で書き換える（再起動の後など）', async () => {
+    const { bridge, touched } = setup();
+    await bridge.updateCard(ALLOWED, MESSAGE, { title: 't' }, THREAD);
+    expect(touched).toEqual([{ channel: THREAD, op: 'edit' }]);
+  });
+
   it('許可した会話の中のスレッドなら、thread_id のチャンネルで操作する', async () => {
     const { bridge, touched } = setup();
     await bridge.addReaction(ALLOWED, MESSAGE, '👍', THREAD);

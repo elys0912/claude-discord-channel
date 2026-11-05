@@ -410,7 +410,7 @@ export async function handleAction(wiring: Wiring, parsed: ActionParse, ctx: Act
     return;
   }
 
-  const pressed = ctx.channelId && ctx.messageTs ? { channel: ctx.channelId, ts: ctx.messageTs } : undefined;
+  const pressed = ctx.channelId && ctx.messageTs ? { channel: ctx.channelId, ts: ctx.messageTs, threadTs: ctx.threadTs } : undefined;
   const at = pressedMessage(ctx);
   const byUserId = ctx.userId ?? '';
 

@@ -260,7 +260,7 @@ export class FileSender {
 
   private async report(pressed: PressedMessage, text: string, color: CardColor): Promise<void> {
     if (!pressed.ts) return;
-    await rewriteAsTextCard(this.opts, { channel: pressed.channel, ts: pressed.ts }, text, color, 'ファイル送信の確認の書き換えに失敗');
+    await rewriteAsTextCard(this.opts, { channel: pressed.channel, ts: pressed.ts, threadTs: pressed.threadTs }, text, color, 'ファイル送信の確認の書き換えに失敗');
   }
 
   /** 終了時。確認待ちのタイマーを止める（送らない） */
