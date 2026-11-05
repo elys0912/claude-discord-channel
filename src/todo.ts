@@ -63,7 +63,7 @@ export class TodoBoard {
     const current = this.current;
     if (current && current.channel === at.channel && current.threadTs === at.threadTs) {
       try {
-        await this.bridge.updateCard(current.channel, current.ts, card);
+        await this.bridge.updateCard(current.channel, current.ts, card, current.threadTs);
         return 'updated';
       } catch (e) {
         this.logger.warn('TODO のカードの書き換えに失敗、新しく出す', errMessage(e));

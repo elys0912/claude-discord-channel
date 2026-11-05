@@ -220,7 +220,7 @@ export function toInbound(message: Message, botUserId: string | undefined): Inbo
  * limit ごとに分けたチャンクのうち、空白だけでないもの。分けた結果、末尾が改行だけのチャンクになることがあり、
  * そのまま送ると Discord に拒否されて、全部届いているのに失敗（sent=N）として返ってしまうため
  */
-function nonBlankChunks(text: string, limit: number): string[] {
+export function nonBlankChunks(text: string, limit: number): string[] {
   return chunkText(text, limit).filter((piece) => piece.trim() !== '');
 }
 
@@ -690,10 +690,14 @@ export class DiscordBridge {
     await this.edit(await this.targets.locate(channel, ts, threadTs), ts, { content: neutralizeBroadcasts(text), embeds: [], components: [] });
   }
 
-  async updateCard(channel: string, ts: string, card: Card): Promise<void> {
+  /**
+   * カードを書き換える。threadTs はカードがスレッドの中にあるときのスレッドの ID。
+   * 在りかの記録（locations）から消えた後や再起動の後でも、スレッドの中のカードを書き換えられるように渡す
+   */
+  async updateCard(channel: string, ts: string, card: Card, threadTs?: string): Promise<void> {
     this.assertAllowed(channel);
     const { embeds, components } = toDiscord(card);
-    await this.edit(await this.targets.locate(channel, ts), ts, { content: '', embeds, components });
+    await this.edit(await this.targets.locate(channel, ts, threadTs), ts, { content: '', embeds, components });
   }
 
   private async edit(channelId: string, messageId: string, options: MessageEditOptions): Promise<void> {

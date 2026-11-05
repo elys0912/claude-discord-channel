@@ -196,7 +196,10 @@ function readDownloadDir(parsed: Record<string, string>): Pick<Tokens, 'download
   return { downloadDir: path.resolve(downloadDir) };
 }
 
-/** SESSION_ALLOW_ALL。on のときだけ設定する。知らない値は warn で知らせて off にする（起動は止めない） */
+/**
+ * SESSION_ALLOW_ALL。on のときだけ設定する。知らない値は warn で知らせて off にする（起動は止めない）。
+ * ほかの on / off の設定（readSwitch）と違って投げないのは、知らない値を安全側の off として扱えるため
+ */
 function readSessionAllowAll(parsed: Record<string, string>, warn: ((message: string) => void) | undefined): Pick<Tokens, 'sessionAllowAll'> {
   const allowAll = parseSwitch(parsed.SESSION_ALLOW_ALL);
   if (allowAll === null) warn?.(unknownSwitchMessage('SESSION_ALLOW_ALL', parsed.SESSION_ALLOW_ALL ?? '', false));

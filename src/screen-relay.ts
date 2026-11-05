@@ -122,7 +122,7 @@ export class ScreenRelay {
   private async report(pressed: PressedMessage, message: string, color: CardColor): Promise<void> {
     if (pressed.ts) {
       const deps = { bridge: this.bridge, logger: this.logger };
-      await rewriteAsTextCard(deps, { channel: pressed.channel, ts: pressed.ts }, message, color, '選択画面の表示の書き換えに失敗');
+      await rewriteAsTextCard(deps, { channel: pressed.channel, ts: pressed.ts, threadTs: pressed.threadTs }, message, color, '選択画面の表示の書き換えに失敗');
     } else {
       await this.bridge.postText(pressed.channel, message, pressed.threadTs).catch(() => undefined);
     }

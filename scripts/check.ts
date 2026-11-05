@@ -68,13 +68,12 @@ async function main(): Promise<void> {
 
 /** ログインして準備を待つ。失敗したら理由の見当を出して false */
 async function login(client: Client, botToken: string): Promise<boolean> {
+  // login が投げたときも止める（残ると、後で ready が誰も待っていないところで reject される）
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     const ready = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('準備が時間内に終わらなかった')), READY_TIMEOUT_MS);
-      client.once(Events.ClientReady, () => {
-        clearTimeout(timer);
-        resolve();
-      });
+      timer = setTimeout(() => reject(new Error('準備が時間内に終わらなかった')), READY_TIMEOUT_MS);
+      client.once(Events.ClientReady, () => resolve());
     });
     await client.login(botToken);
     await ready;
@@ -87,6 +86,8 @@ async function login(client: Client, botToken: string): Promise<boolean> {
       console.error('  トークンが古い（リセットした）か、貼り間違えている可能性がある。Developer Portal の Bot でリセットし直して');
     }
     return false;
+  } finally {
+    clearTimeout(timer);
   }
 }
 

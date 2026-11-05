@@ -3,10 +3,9 @@
 // 受信は本物の gate、ボタンとメニューは本物の parseInteraction を通してから app.ts に渡す。
 // 送ったものは calls に記録し、メッセージの ID は 9001 から順に振る。
 import type { AttachmentRef, DiscordBridgeEvents, RemoteFile } from '../../src/discord.js';
-import { TEXT_CHUNK_MAX } from '../../src/discord.js';
+import { TEXT_CHUNK_MAX, nonBlankChunks } from '../../src/discord.js';
 import type { AppBridge } from '../../src/app.js';
 import type { Card } from '../../src/card.js';
-import { chunkText } from '../../src/chunk.js';
 import type { ParsedAccess } from '../../src/config.js';
 import { neutralizeBroadcasts } from '../../src/format.js';
 import { EventDedupe, conversationOf, forwardDelivery, gate, threadOf } from '../../src/gate.js';
@@ -170,8 +169,8 @@ export class FakeDiscord implements AppBridge {
       const ts = this.record({ method: 'postText', channel, threadTs, text: long.content, files: [long.name] });
       return { ts: [ts], asFile: true };
     }
-    // 本物（DiscordBridge.postText）と同じく、分けた結果が空白だけになったチャンクは送らない
-    const pieces = chunkText(safe, TEXT_CHUNK_MAX).filter((piece) => piece.trim() !== '');
+    // 本物（DiscordBridge.postText）と同じ関数で分け、空白だけになったチャンクは送らない
+    const pieces = nonBlankChunks(safe, TEXT_CHUNK_MAX);
     return { ts: pieces.map((piece) => this.record({ method: 'postText', channel, threadTs, text: piece })) };
   }
 
@@ -185,9 +184,9 @@ export class FakeDiscord implements AppBridge {
     this.calls.push({ method: 'updateText', channel, ts, text: neutralizeBroadcasts(text) });
   }
 
-  async updateCard(channel: string, ts: string, card: Card): Promise<void> {
+  async updateCard(channel: string, ts: string, card: Card, threadTs?: string): Promise<void> {
     this.assertAllowed(channel);
-    this.calls.push({ method: 'updateCard', channel, ts, card });
+    this.calls.push({ method: 'updateCard', channel, ts, card, threadTs });
   }
 
   async addReaction(channel: string, ts: string, emoji: string): Promise<void> {

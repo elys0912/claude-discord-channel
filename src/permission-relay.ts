@@ -28,6 +28,8 @@ const AUTO_ALLOW_PREVIEW_MAX = 300;
 interface MessageRef {
   channel: string;
   ts: string;
+  /** メッセージがスレッドの中にあるときのスレッドの ID（書き換えのときに在りかを探すため） */
+  threadTs?: string | undefined;
 }
 
 /** リレーが使う Discord 側の操作（DiscordBridge のうち必要な部分だけ） */
@@ -177,7 +179,7 @@ export class PermissionRelay {
     try {
       const res = await this.bridge.postCard(target.channel, card, target.threadTs);
       if (res.ts === '') return false;
-      this.posted.set(req.request_id, [{ channel: target.channel, ts: res.ts }]);
+      this.posted.set(req.request_id, [{ channel: target.channel, ts: res.ts, threadTs: target.threadTs }]);
       this.logger.info(`permission_request をスレッドに返信 id=${req.request_id} tool=${req.tool_name} channel=${target.channel}`);
       return true;
     } catch (e) {
@@ -281,7 +283,7 @@ export class PermissionRelay {
     this.posted.delete(requestId);
     for (const t of targets) {
       try {
-        await this.bridge.updateCard(t.channel, t.ts, view);
+        await this.bridge.updateCard(t.channel, t.ts, view, t.threadTs);
       } catch (e) {
         this.logger.warn(`permission メッセージの書き換えに失敗 channel=${t.channel}`, e);
       }
@@ -290,7 +292,7 @@ export class PermissionRelay {
 
   private async markExpired(requestId: string, message: MessageRef): Promise<void> {
     try {
-      await this.bridge.updateCard(message.channel, message.ts, buildExpiredCard(requestId));
+      await this.bridge.updateCard(message.channel, message.ts, buildExpiredCard(requestId), message.threadTs);
     } catch (e) {
       this.logger.warn(`期限切れ表示への書き換えに失敗 channel=${message.channel}`, e);
     }

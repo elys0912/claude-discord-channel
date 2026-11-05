@@ -125,8 +125,13 @@ export class RuleRelay {
       return;
     }
     try {
+      // 解釈できないルールは deny と照らせないので、足さない
       const parsed = parseRuleForCheck(rule);
-      const hits = parsed ? denyOverlaps(parsed, this.opts.loadDeny()) : [];
+      if (!parsed) {
+        await this.report(pressed, `⚠️ ルールを解釈できないので追加しない: ${rule}`, 'error');
+        return;
+      }
+      const hits = denyOverlaps(parsed, this.opts.loadDeny());
       if (hits.length > 0) {
         await this.report(pressed, `🚫 deny に当たるので追加しない: ${rule}\n当たった deny: ${hits.join(', ')}`, 'error');
         return;
@@ -193,6 +198,7 @@ export class RuleRelay {
       );
     } catch (e) {
       this.opts.logger.warn('許可リストからの削除に失敗', e);
+      await this.report(pressed, `⚠️ 消せなかった: ${rule}`, 'error');
     }
   }
 
@@ -200,7 +206,7 @@ export class RuleRelay {
   private async report(pressed: PressedMessage, text: string, color: CardColor): Promise<void> {
     const failureLog = '許可リストの結果の表示に失敗';
     if (pressed.ts) {
-      await rewriteAsTextCard(this.opts, { channel: pressed.channel, ts: pressed.ts }, text, color, failureLog);
+      await rewriteAsTextCard(this.opts, { channel: pressed.channel, ts: pressed.ts, threadTs: pressed.threadTs }, text, color, failureLog);
       return;
     }
     try {

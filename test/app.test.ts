@@ -775,10 +775,12 @@ describe('TODO の進み具合（progress ツール）', () => {
       { content: '直す', status: 'completed' },
     ]);
     expect(second.content).toEqual([{ type: 'text', text: 'updated (2/2 completed)' }]);
-    expect(boards().map((c) => [c.method, c.channel, c.threadTs ?? c.ts])).toEqual([
+    // 書き換えは、出したカード（ts）を、出したスレッド（threadTs）の中で行う
+    expect(boards().map((c) => [c.method, c.channel, c.threadTs])).toEqual([
       ['postCard', DM1, '9500'],
-      ['updateCard', DM1, boards()[0]?.ts],
+      ['updateCard', DM1, '9500'],
     ]);
+    expect(boards()[1]?.ts).toBe(boards()[0]?.ts);
     expect(cardText(boards()[1]?.card)).toContain('2/2 完了');
 
     await h.discord.dm('次の作業', { id: '9600' });

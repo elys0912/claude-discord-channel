@@ -19,12 +19,12 @@ export function textCard(text: string, color: CardColor = 'info'): Card {
  */
 export async function rewriteAsTextCard(
   deps: { bridge: Pick<DiscordBridge, 'updateCard'>; logger: Logger },
-  message: { channel: string; ts: string },
+  message: { channel: string; ts: string; threadTs?: string | undefined },
   text: string,
   color: CardColor,
   failureLog: string
 ): Promise<void> {
-  await deps.bridge.updateCard(message.channel, message.ts, textCard(text, color)).catch((e: unknown) => {
+  await deps.bridge.updateCard(message.channel, message.ts, textCard(text, color), message.threadTs).catch((e: unknown) => {
     deps.logger.warn(failureLog, e);
   });
 }
