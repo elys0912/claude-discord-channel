@@ -32,7 +32,8 @@ import { FileSender } from './send-file.js';
 import { Keepalive, keepaliveStatusLine } from './keepalive.js';
 import type { QuietHours } from './keepalive.js';
 import { formatTime } from './text.js';
-import { UsageWatch } from './usage-watch.js';
+import { UsageWatch, readUsage } from './usage-watch.js';
+import { AutoCompact, takeQuietStart } from './auto-compact.js';
 import { takeCrashNotice } from './crash-notice.js';
 import { TypingIndicator } from './typing.js';
 import { PresenceUpdater } from './presence.js';
@@ -573,6 +574,11 @@ export interface BridgeAppOptions {
   todoProgress?: boolean | undefined;
   /** 使用量とコンテキストの見張り（statusline が書く usage.json としきい値）。省略時は見張らない */
   usageWatch?: { file: string; usageWarnPct: number[]; contextWarnPct: number[]; pollMs?: number | undefined } | undefined;
+  /**
+   * 無操作のときの自動圧縮と起動し直し。省略時はしない。
+   * コンテキストの使用率（usageWatch の usage.json）・応答の終わり（hookInboxFile）・ターミナルの操作（console・restartFlagFile）も要る
+   */
+  autoCompact?: { minPct: number; idleMs: number; quietStartFile: string } | undefined;
   /** start.ps1 が想定外の終了から起動し直したときに置く印（状態ディレクトリの crash.json）。起動後に読んで知らせ、消す */
   crashFile?: string | undefined;
 }
@@ -660,8 +666,6 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
     : undefined;
   const keepalive = createKeepalive(opts, { server, watchdog, relay, turn, usageWatch });
   const presence = createPresence(opts, relay, turn);
-  const inbox = createHookInbox(opts, { turn, typing, usageWatch, keepalive, sessionAllow, notice, watchdog, relay });
-  const status = createStatus(opts, { startedAt, watchdog, relay, inbox, sessionAllow, keepalive, usageWatch });
   const session = opts.restartFlagFile
     ? new SessionControl({
         console: opts.console,
@@ -672,6 +676,9 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
         sessionId: () => turn.sessionId(),
       })
     : undefined;
+  const autoCompact = createAutoCompact(opts, { watchdog, relay, turn });
+  const inbox = createHookInbox(opts, { turn, typing, usageWatch, keepalive, autoCompact, sessionAllow, notice, watchdog, relay });
+  const status = createStatus(opts, { startedAt, watchdog, relay, inbox, sessionAllow, keepalive, usageWatch });
   const wiring: Wiring = {
     bridge,
     server,
@@ -690,12 +697,13 @@ export async function startBridgeApp(opts: BridgeAppOptions): Promise<RunningApp
       turn.begin();
       todo?.reset();
       keepalive?.resetCount();
+      autoCompact?.activity();
       typing.start(at.channel, at.threadTs);
     },
     stopTyping: () => typing.stopAll(),
   };
 
-  const stopper = createStopper(opts, { server, relay, inbox, session, files, keepalive, usageWatch, presence, typing, watchdog });
+  const stopper = createStopper(opts, { server, relay, inbox, session, files, keepalive, autoCompact, usageWatch, presence, typing, watchdog });
   opts.onCleanupReady?.(stopper.stop);
 
   try {
@@ -792,6 +800,50 @@ function createKeepalive(
   });
 }
 
+/**
+ * 無操作のときの自動圧縮と起動し直し。結果は Discord に出さないので、ログだけに書く SessionControl を別に作る。
+ * コンテキストの使用率・応答の終わり・ターミナルの操作のどれかが無ければ作らない
+ */
+function createAutoCompact(
+  opts: BridgeAppOptions,
+  deps: { watchdog: ResponseWatchdog; relay: PermissionRelay; turn: TurnState }
+): AutoCompact | undefined {
+  const { autoCompact, usageWatch, hookInboxFile, console: terminal, restartFlagFile, logger } = opts;
+  if (!autoCompact || !usageWatch || !hookInboxFile || !terminal || !restartFlagFile) return undefined;
+
+  const { watchdog, relay, turn } = deps;
+  const silent = new SessionControl({
+    console: terminal,
+    restartFlagFile,
+    bridge: {
+      postText: (_channel, text) => {
+        logger.info(`自動圧縮: ${text}`);
+        return Promise.resolve({ ts: [] });
+      },
+    },
+    logger,
+    killParent: opts.killParent,
+    sessionId: () => turn.sessionId(),
+  });
+  // 知らせを出さないので、投稿先のスレッドは使われない
+  const nowhere: ThreadRef = { channel: '', threadTs: '' };
+  return new AutoCompact({
+    minPct: autoCompact.minPct,
+    idleMs: autoCompact.idleMs,
+    contextUsed: () => {
+      const usage = readUsage(usageWatch.file);
+      const sameSession = opts.sessionTag === undefined || usage?.session_tag === opts.sessionTag;
+      return sameSession ? usage?.context?.used : undefined;
+    },
+    isBusy: () => turn.isActive() || watchdog.isWaiting() || relay.unansweredCount() > 0,
+    compact: () => silent.compact(nowhere, 'auto'),
+    restart: () => silent.restart(nowhere, 'auto', false),
+    quietStartFile: autoCompact.quietStartFile,
+    quietStart: takeQuietStart(autoCompact.quietStartFile),
+    logger,
+  });
+}
+
 /** ボットのステータス表示（bridge が対応しているときだけ） */
 function createPresence({ bridge, logger }: BridgeAppOptions, relay: PermissionRelay, turn: TurnState): PresenceUpdater | undefined {
   if (!bridge.setPresence) return undefined;
@@ -808,6 +860,7 @@ interface HookDeps {
   typing: TypingIndicator;
   usageWatch: UsageWatch | undefined;
   keepalive: Keepalive | undefined;
+  autoCompact: AutoCompact | undefined;
   sessionAllow: SessionAllowAll | undefined;
   notice: NoticePoster;
   watchdog: ResponseWatchdog;
@@ -819,7 +872,7 @@ function createHookInbox(opts: BridgeAppOptions, deps: HookDeps): HookInbox | un
   if (!opts.hookInboxFile) return undefined;
 
   const { logger } = opts;
-  const { turn, typing, usageWatch, keepalive, sessionAllow, notice, watchdog, relay } = deps;
+  const { turn, typing, usageWatch, keepalive, autoCompact, sessionAllow, notice, watchdog, relay } = deps;
   return new HookInbox({
     file: opts.hookInboxFile,
     logger,
@@ -830,12 +883,14 @@ function createHookInbox(opts: BridgeAppOptions, deps: HookDeps): HookInbox | un
       switch (event.hook_event_name) {
         case 'UserPromptSubmit':
           turn.begin();
+          autoCompact?.activity();
           break;
         case 'Stop':
           typing.stopAll();
           turn.ended();
           usageWatch?.limitCleared();
           keepalive?.requestEnded(event.at);
+          autoCompact?.requestEnded(event.at);
           break;
         case 'StopFailure': {
           typing.stopAll();
@@ -843,6 +898,7 @@ function createHookInbox(opts: BridgeAppOptions, deps: HookDeps): HookInbox | un
           turn.failed(rateLimited);
           if (rateLimited) usageWatch?.limitHit();
           keepalive?.requestEnded(event.at);
+          autoCompact?.requestEnded(event.at);
           break;
         }
         case 'SessionStart':
@@ -860,6 +916,10 @@ function createHookInbox(opts: BridgeAppOptions, deps: HookDeps): HookInbox | un
       if (event.hook_event_name === 'SessionStart' && event.source === 'clear' && sessionAllow?.disable()) {
         logger.info('全部許可を解除（新しい会話）');
         await notice.post('🔒 新しい会話になったので「このセッション中は全部許可」を解除した');
+      }
+      if (autoCompact?.silence(event)) {
+        logger.info(`自動の操作による hook なので知らせない event=${event.hook_event_name}`);
+        return;
       }
       const found = hookToNotice(event, { waiting: watchdog.isWaiting(), pending: relay.unansweredCount() });
       if (!found) return;
@@ -920,13 +980,14 @@ function createStopper(
     session: SessionControl | undefined;
     files: FileSender | undefined;
     keepalive: Keepalive | undefined;
+    autoCompact: AutoCompact | undefined;
     usageWatch: UsageWatch | undefined;
     presence: PresenceUpdater | undefined;
     typing: TypingIndicator;
     watchdog: ResponseWatchdog;
   }
 ): Stopper {
-  const { server, relay, inbox, session, files, keepalive, usageWatch, presence, typing, watchdog } = parts;
+  const { server, relay, inbox, session, files, keepalive, autoCompact, usageWatch, presence, typing, watchdog } = parts;
   let stopped: Promise<void> | undefined;
   let startFailed = false;
 
@@ -937,6 +998,7 @@ function createStopper(
       session?.stop();
       files?.stop();
       keepalive?.stop();
+      autoCompact?.stop();
       usageWatch?.stop();
       presence?.stop();
       typing.stopAll();
