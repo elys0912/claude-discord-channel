@@ -8,6 +8,7 @@
 ### 追加
 
 - 応答の終わりから 30 分操作が無く、コンテキストが 70% 以上なら、自動で `/compact` を送り、続けて同じ会話のまま起動し直す（claude.exe のメモリも戻す）。Discord には知らせない。`.env` の `AUTO_COMPACT_PCT`（空で無効）/ `AUTO_COMPACT_IDLE_MIN` で変えられる
+- `access.json` の `taskWebhooks` に書いた webhook が許可したチャンネルに投稿したものを、定期の依頼（`kind="task"`）として Claude に渡す。クラウドの定期タスクから作業を頼むため
 
 ## 0.2.0 (2026-11-11)
 

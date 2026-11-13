@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ParsedAccess } from '../src/config.js';
 import { EventDedupe, forwardDelivery, gate, parsePermissionReply } from '../src/gate.js';
 import type { InboundMessage } from '../src/gate.js';
+import { parseCommand } from '../src/commands.js';
 
 const GUILD = '111111111111111111';
 const USER = '222222222222222222';
@@ -160,6 +161,36 @@ describe('forwardDelivery', () => {
     expect(r.content.endsWith('\n(attachment)')).toBe(true);
     expect(r.meta).toMatchObject({ attachment_ids: '1', attachment_count: '1' });
     expect(r.files).toHaveLength(1);
+  });
+});
+
+describe('定期の依頼（taskWebhooks）', () => {
+  const TASK_HOOK = '999999999999999980';
+  const taskAccess: ParsedAccess = { ...access, taskWebhooks: [TASK_HOOK] };
+  const runTask = (msg: InboundMessage) => gate(msg, { access: taskAccess, selfBotUserId: BOT, dedupe: new EventDedupe() });
+  const webhook = (overrides: Partial<InboundMessage> = {}) =>
+    inChannel({ authorId: TASK_HOOK, authorIsBot: true, webhookId: TASK_HOOK, content: '今日の分の調査をお願い', ...overrides });
+
+  it('登録した webhook の投稿は、メンションなしで依頼として渡す', () => {
+    const r = runTask(webhook());
+    expect(r).toMatchObject({
+      kind: 'deliver',
+      content: '（定期の依頼: access.json に登録した webhook から届いた。先生からの依頼として扱い、結果はこのメッセージのスレッドに reply で返す）\n今日の分の調査をお願い',
+    });
+    if (r.kind !== 'deliver') throw new Error('deliver ではない');
+    expect(r.meta).toMatchObject({ chat_id: CHANNEL, thread_id: MESSAGE, webhook_id: TASK_HOOK, kind: 'task' });
+    expect(r.meta).not.toHaveProperty('user_id');
+  });
+
+  it('許可していないチャンネル・登録していない webhook（朝の日報など）のものは渡さない', () => {
+    expect(runTask(webhook({ channelId: '333333333333333330' }))).toEqual({ kind: 'drop', reason: 'channel_not_allowed' });
+    expect(runTask(webhook({ webhookId: '999999999999999981', authorId: '999999999999999981' }))).toEqual({ kind: 'drop', reason: 'bot_or_self' });
+  });
+
+  it('本文が !clear でも、ブリッジのコマンドにならない形で渡す', () => {
+    const r = runTask(webhook({ content: '!clear' }));
+    if (r.kind !== 'deliver') throw new Error('deliver ではない');
+    expect(parseCommand(r.content)).toBeUndefined();
   });
 });
 
