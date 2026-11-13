@@ -118,8 +118,14 @@ describe('loadTokens', () => {
       botToken: TOKEN,
       keepalive: { enabled: true, afterMin: 55, max: 6, quiet: { start: 60, end: 420 } },
       usageWatch: { enabled: true, usageWarnPct: [80, 95], contextWarnPct: [70, 90] },
+      autoCompact: { pct: 70, idleMin: 30 },
       todoProgress: true,
     });
+  });
+
+  it('AUTO_COMPACT_PCT が空なら自動圧縮をしない', () => {
+    write(`DISCORD_BOT_TOKEN=${TOKEN}\nAUTO_COMPACT_PCT=\nAUTO_COMPACT_IDLE_MIN=10\n`);
+    expect(loadTokens(dir).autoCompact).toEqual({ pct: undefined, idleMin: 10 });
   });
 
   it('USAGE_WATCH=off としきい値を読み、しきい値は小さい順に並べ、空なら知らせない', () => {

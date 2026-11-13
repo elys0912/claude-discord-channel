@@ -18,6 +18,7 @@ import { HOOK_LOG_FILE, SESSION_TAG_ENV } from './hook-event.js';
 import { RESTART_FLAG_FILE } from './session-control.js';
 import { USAGE_FILE } from './statusline.js';
 import { CRASH_FILE } from './crash-notice.js';
+import { QUIET_START_FILE } from './auto-compact.js';
 import { isPlaceholder, runPlaceholder } from './placeholder.js';
 import { managedSettingsFiles } from './settings-files.js';
 
@@ -187,6 +188,10 @@ function bridgeAppOptions(dir: string, tokens: Tokens, logger: Logger, bridge: D
     usageWatch: tokens.usageWatch.enabled
       ? { file: path.join(dir, USAGE_FILE), usageWarnPct: tokens.usageWatch.usageWarnPct, contextWarnPct: tokens.usageWatch.contextWarnPct }
       : undefined,
+    autoCompact:
+      tokens.autoCompact.pct === undefined
+        ? undefined
+        : { minPct: tokens.autoCompact.pct, idleMs: tokens.autoCompact.idleMin * 60_000, quietStartFile: path.join(dir, QUIET_START_FILE) },
     download: tokens.downloadDir
       ? { info: (ref) => bridge.attachmentInfo(ref), fetch: (file, signal) => bridge.fetchFile(file, signal), dir: tokens.downloadDir }
       : undefined,

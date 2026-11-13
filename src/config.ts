@@ -7,6 +7,7 @@ import { errMessage } from './errors.js';
 import { DEFAULT_KEEPALIVE_AFTER_MIN, DEFAULT_KEEPALIVE_MAX, DEFAULT_KEEPALIVE_QUIET, parseQuietHours } from './keepalive.js';
 import type { QuietHours } from './keepalive.js';
 import { DEFAULT_CONTEXT_WARN_PCT, DEFAULT_USAGE_WARN_PCT, parsePercents } from './usage-watch.js';
+import { DEFAULT_AUTO_COMPACT_IDLE_MIN, DEFAULT_AUTO_COMPACT_PCT } from './auto-compact.js';
 import { stripBom } from './text.js';
 import { parseSwitch, unknownSwitchMessage } from './env-switch.js';
 
@@ -89,6 +90,8 @@ export interface Tokens {
   keepalive: { enabled: boolean; afterMin: number; max: number; quiet: QuietHours | undefined };
   /** 使用量とコンテキストの見張り（.env の USAGE_WATCH / USAGE_WARN_PCT / CONTEXT_WARN_PCT） */
   usageWatch: { enabled: boolean; usageWarnPct: number[]; contextWarnPct: number[] };
+  /** 無操作のときの自動圧縮と起動し直し（.env の AUTO_COMPACT_PCT / AUTO_COMPACT_IDLE_MIN）。pct が undefined なら無効 */
+  autoCompact: { pct: number | undefined; idleMin: number };
   /** .env の TODO_PROGRESS。TODO の進み具合のカードを出すか（既定 on） */
   todoProgress: boolean;
 }
@@ -129,6 +132,15 @@ function readUsageWatch(parsed: Record<string, string>): Tokens['usageWatch'] {
     enabled: readSwitch(parsed, 'USAGE_WATCH', true),
     usageWarnPct: readPercents(parsed, 'USAGE_WARN_PCT', DEFAULT_USAGE_WARN_PCT),
     contextWarnPct: readPercents(parsed, 'CONTEXT_WARN_PCT', DEFAULT_CONTEXT_WARN_PCT),
+  };
+}
+
+/** 自動圧縮の設定。AUTO_COMPACT_PCT が無ければ既定の割合、空なら無効 */
+function readAutoCompact(parsed: Record<string, string>): Tokens['autoCompact'] {
+  const disabled = parsed.AUTO_COMPACT_PCT?.trim() === '';
+  return {
+    pct: disabled ? undefined : (readInt(parsed, 'AUTO_COMPACT_PCT', 1, 100) ?? DEFAULT_AUTO_COMPACT_PCT),
+    idleMin: readInt(parsed, 'AUTO_COMPACT_IDLE_MIN', 1, 24 * 60) ?? DEFAULT_AUTO_COMPACT_IDLE_MIN,
   };
 }
 
@@ -179,6 +191,7 @@ export function loadTokens(dir: string, warn?: (message: string) => void): Token
     botToken,
     keepalive: readKeepalive(parsed),
     usageWatch: readUsageWatch(parsed),
+    autoCompact: readAutoCompact(parsed),
     todoProgress: readSwitch(parsed, 'TODO_PROGRESS', true),
     ...readDownloadDir(parsed),
     ...readSessionAllowAll(parsed, warn),
