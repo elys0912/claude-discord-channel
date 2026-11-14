@@ -25,6 +25,20 @@ import { deriveRule } from './allow-rules.js';
 /** 自動許可をスレッドに記録するとき、入力を載せる長さ */
 const AUTO_ALLOW_PREVIEW_MAX = 300;
 
+/**
+ * カードを出さずに許可する Artifact の操作か（ADR 0011）。夜の調査の報告の公開で毎回止まらないようにする。
+ * delete は戻せないので聞く。入力が JSON として読めない（途中で切られた等）ときも、delete でないと確かめられないので聞く
+ */
+function isAutoAllowedArtifact(req: PermissionRequest): boolean {
+  if (req.tool_name !== 'Artifact') return false;
+  try {
+    const input: unknown = JSON.parse(req.input_preview);
+    return typeof input === 'object' && input !== null && (input as Record<string, unknown>).action !== 'delete';
+  } catch {
+    return false;
+  }
+}
+
 interface MessageRef {
   channel: string;
   ts: string;
@@ -107,6 +121,7 @@ export class PermissionRelay {
       this.logger.warn(`保留中の permission_request と同じ ID が届いたので無視する id=${req.request_id}`);
       return;
     }
+    if (await this.tryAllowArtifact(req)) return;
     if (await this.tryAutoAllow(req)) return;
     this.pending.add(req);
     this.startExpiryTimer(req.request_id);
@@ -138,6 +153,19 @@ export class PermissionRelay {
     this.logger.info(
       `permission_request を配信 id=${req.request_id} tool=${req.tool_name} 成功=${delivered.length}/${results.length}`
     );
+  }
+
+  /** delete 以外の Artifact の操作なら、カードを出さずに allow を返してログに残す。送れなかったら false（カードで聞く） */
+  private async tryAllowArtifact(req: PermissionRequest): Promise<boolean> {
+    if (!isAutoAllowedArtifact(req)) return false;
+    try {
+      await this.claude.sendVerdict({ requestId: req.request_id, behavior: 'allow' });
+    } catch (e) {
+      this.logger.error(`Artifact の自動許可の送信に失敗 id=${req.request_id}`, e);
+      return false;
+    }
+    this.logger.info(`自動許可（Artifact） id=${req.request_id}`);
+    return true;
   }
 
   /**

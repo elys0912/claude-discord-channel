@@ -213,6 +213,33 @@ describe('PermissionRelay', () => {
     expect(updates[0]?.text).toContain('❌ 拒否した');
   });
 
+  describe('Artifact の自動許可', () => {
+    const artifact = (input: string) => ({ ...REQ, tool_name: 'Artifact', input_preview: input });
+
+    it('公開は、カードを出さずに allow を返す', async () => {
+      const { relay, replies, posts, verdicts } = setup();
+      relay.rememberThread('C1', '77');
+      await relay.request(artifact(JSON.stringify({ file_path: 'C:/tmp/report.html', icon: 'report' })));
+
+      expect(verdicts).toEqual([{ requestId: 'abcde', behavior: 'allow' }]);
+      expect(replies).toHaveLength(0);
+      expect(posts).toHaveLength(0);
+      expect(relay.unansweredCount()).toBe(0);
+    });
+
+    it.each([
+      ['delete', JSON.stringify({ action: 'delete', url: 'https://claude.ai/artifact/x' })],
+      ['途中で切れた入力', '{"file_path": "C:/tmp/rep…'],
+    ])('%s は、今までどおりカードで聞く', async (_label, input) => {
+      const { relay, replies, verdicts } = setup();
+      relay.rememberThread('C1', '77');
+      await relay.request(artifact(input));
+
+      expect(verdicts).toEqual([]);
+      expect(replies[0]?.card.title).toContain('実行許可');
+    });
+  });
+
   describe('このセッション中は全部許可', () => {
     it('有効でなければ、カードに 🔓 のボタンを出す', async () => {
       const { relay, replies } = setup(() => 0, { sessionAllow: new SessionAllowAll(() => []) });
