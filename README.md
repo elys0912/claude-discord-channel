@@ -5,7 +5,7 @@ Claude の返信やリアクションを受け取るのも、実行許可に答�
 
 [claude-slack-channel](https://github.com/elys0912/claude-slack-channel) の Discord 版。Slack に依存しない部分はそこから持ってきて、Discord とのやりとりだけを書き直した。
 
-初めて使うときは、「必要なもの」から「起動」までを順に進めれば動かせる。その先は、必要になったときに [ドキュメント](#ドキュメント) の該当するファイルを開く。動かないときは [トラブルシューティング](docs/reference.md#トラブルシューティング) を見る。
+初めて使うときは、「必要なもの」から「起動」までを順に進めれば動かせる。その先は必要になったときに [ドキュメント](#ドキュメント) の該当するファイルを開く。動かないときは [トラブルシューティング](docs/reference.md#トラブルシューティング) を見る。
 
 ## 概要
 
@@ -26,7 +26,7 @@ Claude Code（claude.exe、手元のセッション）
 
 ## 必要なもの
 
-- Windows と Windows Terminal。VS Code の統合ターミナルは、動作を確かめていないので対象外。
+- Windows と Windows Terminal。VS Code の統合ターミナルは動作を確かめていないので対象外。
 - Node.js 24 以上。Claude Code が `node` コマンドでこのサーバーを起動するので、`node` と `npm` に **PATH を通しておく**。
 - Claude Code。channels 機能と、channel 経由の実行許可の確認に対応した版が要る（2.1.289 以降で確かめた）。`claude.exe` は次の順に探す。
   1. PATH 上の `claude`
@@ -163,7 +163,7 @@ Windows Terminal から実行する。
 - ボットに話しかけるとメッセージが手元のセッションに届き、届いた印に 👀 が付く。Claude が考えている間は「入力中…」が出る。作業の TODO があれば、進み具合のカードも出る。
 - Claude の返事は、DM なら元のメッセージへの返信として、チャンネルなら元の発言から作ったスレッドに届く。
 - Discord 側の会話はすべて1つのセッションの同じ文脈を共有する。
-- ほかの人の発言も、右クリックの **アプリ** → **Claude に渡す** で Claude に渡せる（[右クリックで Claude に渡す](docs/usage.md#右クリックで-claude-に渡す)）。
+- ほかの人の発言も右クリックの **アプリ** → **Claude に渡す** で Claude に渡せる（[右クリックで Claude に渡す](docs/usage.md#右クリックで-claude-に渡す)）。
 - テキストの添付（長文を貼ったときの `message.txt` など）は、中身を本文に足して渡す。それ以外の添付は名前・種類・サイズだけを渡し、中身が要るときは Claude が `download_file` で取りに行く。
 - 許可リストに無い操作を Claude が実行しようとすると、確認のカードが届く。**Allow / Deny** のボタンか `yes xxxxx` / `no xxxxx` の返信で答える。30分答えなければ自動で拒否する。
 - 確認のカードの **♾ 今後も許可** を押すと、同じ種類の操作を次回の起動から確認なしで通せる。♾ が出るのは、読み取りだけの決まった操作（`ls` / `git status` など。一覧は [docs/security.md](docs/security.md#今後も許可で作れるルール)）に限る。
@@ -192,10 +192,10 @@ Claude Code 側の出来事（使用量の上限、ターミナル側の入力�
 Discord から手元の PC を操作する以上、何をどこまで許すかが一番の注意点になる。詳しくは [docs/security.md](docs/security.md) を参照。
 
 - 送信者は Discord のユーザー ID（`allowFrom`）とサーバー ID（`guildId`）で判定する。表示名やユーザー名は使わない。
-- Discord のセッションは、ユーザー設定（`~/.claude/settings.json`）を読まない設定で起動する。普段使いのために入れた緩い許可を、Discord からの指示に効かせないため。権限は [config/channel-settings.json](config/channel-settings.json) で絞る。
+- Discord のセッションはユーザー設定（`~/.claude/settings.json`）を読まない設定で起動する。普段使いのために入れた緩い許可を、Discord からの指示に効かせないため。権限は [config/channel-settings.json](config/channel-settings.json) で絞る。
 - 主に次のリスクが残る（すべては [残るリスク](docs/security.md#残るリスク) にある）。
   - 許可ユーザーの Discord アカウントが乗っ取られると、手元の Claude をそのまま操作される。
-  - 確認で許可した操作は、その内容どおりに実行される。確認の中身はよく読む。
+  - 確認で許可した操作はその内容どおりに実行される。確認の中身はよく読む。
   - Discord のメッセージ・リポジトリの中身・Web ページに仕込まれた指示（プロンプトインジェクション）を、Claude が実行しようとすることがある。最後の防御は確認での拒否になる。
 - トークンが漏れたら、すぐ Developer Portal でリセットする。手順は [トークンが漏れたとき](docs/security.md#トークンが漏れたとき) にある。
 

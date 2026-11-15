@@ -105,7 +105,7 @@ Gateway の再接続は discord.js に任せている。
 
 ## トラブルシューティング
 
-まず `logs\bridge.log` を見る（トークンは伏せてある）。接続状態は、`!status` か、セッションの中で `/mcp` を実行して `discordbridge` の状態を見れば分かる。
+まず `logs\bridge.log` を見る（トークンは伏せてある）。接続状態は `!status` か、セッションの中で `/mcp` を実行して `discordbridge` の状態を見れば分かる。
 
 ### 起動できない・接続できない
 
